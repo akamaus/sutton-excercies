@@ -5,6 +5,8 @@ NCAR = 20  # number of cars in zone
 MCAR = 5  # maximum number of moved cars
 GAMMA = 0.9
 
+M_PUA = 10
+
 LAM_RENT1 = 4
 LAM_RET1 = 3
 
@@ -15,10 +17,17 @@ RENT_PRICE = 10
 MOVE_PRICE = 2
 
 diff_table = {}
+poisson_table = {}
 
 
 def poisson(lam, n):
-    return math.exp(-lam) * math.pow(lam, n) / math.factorial(n)
+    key = (lam, n)
+    if key in poisson_table:
+        val = poisson_table[key]
+    else:
+        val = math.exp(-lam) * math.pow(lam, n) / math.factorial(n)
+        poisson_table[key] = val
+    return val
 
 
 def poisson_diff(d, lam1, lam2):
@@ -82,12 +91,49 @@ def reward(a1, b1, m):
     return r
 
 
+def reward(a1, b1, a2, b2, m):
+    d1 = a2 - a1 - m
+    d2 = b2 - b1 + m
+    r = 0
+    for n in range(NCAR+1):
+        r += poisson(LAM_RENT1, n) * min(n, a1) * RENT_PRICE
+    for n in range(NCAR+1):
+        r += poisson(LAM_RENT2, n) * min(n, b1) * RENT_PRICE
+
+    r -= MOVE_PRICE * abs(m)
+    return r
+
+
 def value(values, a1, b1, m):
-    v = reward(a1, b1, m)
-    for a2 in range(NCAR + 1):
-        for b2 in range(NCAR + 1):
-            p_trans = p_transfer(a1, b1, a2, b2, m)
-            v += GAMMA * p_trans * values[a2, b2]
+    v = 0
+    for r1 in range(M_PUA):
+        for r2 in range(M_PUA):
+            r = 0
+
+            a2 = max(a1-r1, 0)
+            b2 = max(b1-r2, 0)
+
+            r += (a1-a2 + b1-b2) * RENT_PRICE
+            p = poisson(LAM_RENT1, r1) * poisson(LAM_RENT2, r2)
+
+            if m > a2:
+                m = a2
+            if -m > b2:
+                m = -b2
+
+            r -= abs(m) * MOVE_PRICE
+
+            a3 = a2-m
+            b3 = b2+m
+
+            for t1 in range(M_PUA):
+                for t2 in range(M_PUA):
+                    a4 = min(a3 + t1, NCAR)
+                    b4 = min(b3 + t2, NCAR)
+
+                    p2 = p * poisson(LAM_RET1, t1) * poisson(LAM_RET2, t2)
+
+                    v += p2 * (r + GAMMA*values[a4, b4])
     return v
 
 
@@ -116,9 +162,32 @@ def greedy_policy(values):
     return policy
 
 
+def value_iteration(values):
+    policy = np.zeros_like(values)
+    values2 = np.array(values)
+    for a1 in range(NCAR + 1):
+        for b1 in range(NCAR + 1):
+            best_m = None
+            best_v = None
+            v = None
+            for m in range(-MCAR, MCAR+1):
+                v = value(values2, a1, b1, m)
+                if best_v is None or v > best_v:
+                    best_v = v
+                    best_m = m
+            policy[a1, b1] = best_m
+            values2[a1, b1] = v
+
+    return values2, policy
+
+
 def get_default_policy():
     return np.zeros([NCAR+1, NCAR+1], dtype=np.int32)
 
 
 def get_default_values():
     return np.zeros([NCAR+1, NCAR+1])
+
+
+if __name__ == '__main__':
+    value(get_default_values(), 10,10,0)
