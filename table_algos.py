@@ -3,9 +3,10 @@ import numpy as np
 
 
 class QPolicy:
-    def __init__(self, env, eps=0.1):
+    def __init__(self, env, eps=0.1, alpha=0.1):
         self.env = env
-        self.eps = eps
+        self.eps = eps  # greedines
+        self.alpha = alpha  # update smoothness
         self.qvalues = np.zeros(env.get_sizes() + (env.N_ACTIONS,))
 
     def get_qvalue(self, s, a=None):
@@ -15,9 +16,10 @@ class QPolicy:
             pos = tuple(s) + (a,)
         return self.qvalues.__getitem__(pos)
 
-    def update_qvalue(self, s, a, d):
+    def update_qvalue(self, s, a, tgt):
         k = tuple(s) + (a,)
-        self.qvalues.__setitem__(k, self.get_qvalue(s, a) + d)
+        val = self.qvalues.__getitem__(k)
+        self.qvalues.__setitem__(k, val + self.alpha*(tgt - val))
 
     def eps_policy(self, state=None, eps=None):
         if state is None:
@@ -85,8 +87,7 @@ class MonteCarlo(QPolicy):
 
 class Sarsa(QPolicy):
     def __init__(self, env, eps=0.1, alpha=0.1, gamma = 0.9):
-        super().__init__(env, eps)
-        self.alpha = alpha  # learning coeff
+        super().__init__(env, eps=eps, alpha=alpha)
         self.gamma = gamma  # discount factor
 
     def run_episode(self, callback=None):
@@ -102,8 +103,7 @@ class Sarsa(QPolicy):
                 callback()
 
             a = self.eps_policy()
-            self.update_qvalue(prev_s, prev_a,
-                               self.alpha * (rew + self.gamma * self.get_qvalue(s, a) - self.get_qvalue(prev_s, prev_a)))
+            self.update_qvalue(prev_s, prev_a, rew + self.gamma * self.get_qvalue(s, a))
             g += rew
             if res == 'FINISH':
                 break
@@ -115,8 +115,7 @@ class Sarsa(QPolicy):
 
 class QLearning(QPolicy):
     def __init__(self, env, eps=0.1, alpha=0.1, gamma = 0.9):
-        super().__init__(env, eps)
-        self.alpha = alpha  # learning coeff
+        super().__init__(env, eps=eps, alpha=alpha)
         self.gamma = gamma  # discount factor
 
     def run_episode(self, callback=None, eps=None):
@@ -134,10 +133,61 @@ class QLearning(QPolicy):
 
             qs = self.get_qvalue(s2)
 
-            self.update_qvalue(s, a,
-                               self.alpha * (reward + self.gamma * max(qs) - self.get_qvalue(s, a)))
+            self.update_qvalue(s, a, reward + self.gamma * max(qs))
             g += reward
             if res == 'FINISH':
                 break
             s = s2
         return g
+
+
+class NStepSarsa(QPolicy):
+    def __init__(self, env, n, eps=0.1, alpha=0.1, gamma=0.9):
+        super().__init__(env, eps=eps, alpha=alpha)
+        self.gamma = gamma  # discount factor
+        self.n = n  # length of backup chain
+
+    def run_episode(self, callback=None, eps=None):
+        self.env.reset()
+        states = []
+        actions = []
+        rewards = []
+
+        s = self.env.get_state()
+        a = self.eps_policy(s, eps=eps)
+        states.append(s)
+        actions.append(a)
+        rewards.append(0)
+
+        t_max = 10**9  # length of current episode
+
+        for t in range(10**9):
+            if t < t_max:
+                res, s, rew = self.env.act(a)
+                states.append(s)
+                rewards.append(rew)
+                if callback is not None:
+                    callback()
+                if res == 'FINISH':
+                    t_max = t+1
+                else:
+                    a = self.eps_policy(s, eps=eps)
+                    actions.append(a)
+
+            tau = t - self.n + 1  # time in past where q-value being updated
+
+            if tau >= 0:
+                gain = 0
+                d = 1  # current cumulative discount
+                for i in range(tau+1, min(tau+self.n, t_max)+1):
+                    gain += d * rewards[i]
+                    d *= self.gamma
+                if tau + self.n < t_max:
+                    gain += d * self.get_qvalue(states[tau+self.n], actions[tau+self.n])
+
+                self.update_qvalue(states[tau], actions[tau], gain)
+
+            if tau == t_max - 1:
+                break
+
+        return np.sum(rewards)
