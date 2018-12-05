@@ -6,6 +6,8 @@ let
   self = pkgs.python36Packages;
   inherit (self) buildPythonPackage fetchPypi;
 
+  tensorboardX = self.callPackage ./tensorboardX.nix {};
+
   be = stdenv.mkDerivation {
     name = "buildenv";
     buildInputs =
@@ -13,11 +15,13 @@ let
       with self;
     [ tqdm
       ipython
-      jupyter	
+      jupyter
       matplotlib
       numpy
       pyqt5
       python
+      pytorchWithCuda
+      tensorboardX
     ]);
 
     shellHook = with pkgs;

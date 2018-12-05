@@ -15,7 +15,15 @@ class Policy(nn.Module):
         self.saved_log_probs = []
         self.rewards = []
 
+#        self.inp_bias = torch.FloatTensor([9,
+#        self.inp_var
+
+
     def forward(self, x):
+        diap = torch.FloatTensor([9, 14, 5, 5])
+        inp_bias = torch.FloatTensor([9, 14, 5, 5]) / 2
+        inp_var = diap
+        x = (x - inp_bias) / inp_var
         x = F.relu(self.affine1(x))
         action_scores = self.affine2(x)
         return F.softmax(action_scores, dim=1)
