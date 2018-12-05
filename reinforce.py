@@ -7,23 +7,22 @@ from torch.distributions import Categorical
 
 
 class Policy(nn.Module):
-    def __init__(self, state_dims, n_actions, hidden=128):
-        super(Policy, self).__init__()
+    def __init__(self, env, hidden=128):
+        super().__init__()
+        szs = env.get_sizes()
+        state_dims = len(szs)
+        n_actions = env.N_ACTIONS
+
         self.affine1 = nn.Linear(state_dims, hidden)
         self.affine2 = nn.Linear(hidden, n_actions)
+
+        self.inp_diap = torch.FloatTensor(szs)
 
         self.saved_log_probs = []
         self.rewards = []
 
-#        self.inp_bias = torch.FloatTensor([9,
-#        self.inp_var
-
-
     def forward(self, x):
-        diap = torch.FloatTensor([9, 14, 5, 5])
-        inp_bias = torch.FloatTensor([9, 14, 5, 5]) / 2
-        inp_var = diap
-        x = (x - inp_bias) / inp_var
+        x = (x - self.inp_diap / 2) / self.inp_diap
         x = F.relu(self.affine1(x))
         action_scores = self.affine2(x)
         return F.softmax(action_scores, dim=1)
@@ -37,25 +36,49 @@ class Policy(nn.Module):
         return action.item()
 
 
+class Values(nn.Module):
+    def __init__(self, env, hidden=128):
+        super().__init__()
+        szs = env.get_sizes()
+        n_states = len(szs)
+
+        self.inp_diap = torch.FloatTensor(szs)
+
+        self.affine1 = nn.Linear(n_states, hidden)
+        self.affine2 = nn.Linear(hidden, 1)
+
+        self.states = []
+
+    def forward(self, x):
+        x = (x - self.inp_diap / 2) / self.inp_diap
+
+        x = F.relu(self.affine1(x))
+        y = self.affine2(x)
+        return y
+
+
 class Trainer:
-    def __init__(self, env, policy, writer=None, lr=1e-3, max_len=1000, gamma=0.95):
+    def __init__(self, env, policy, value=None, writer=None, lr=1e-3, max_len=1000, gamma=0.95):
         self.env = env
         self.policy = policy
+        self.value = value
         self.max_len = max_len
         self.gamma = gamma
 
         self.writer = writer
         self.opt = torch.optim.Adam(policy.parameters(), lr=lr)
+        self.value_opt = torch.optim.Adam(value.parameters(), lr=lr)
         self.running_reward = None
         self.iter = 0
 
     def run_episode(self):
         self.env.reset()
-
         for t in range(self.max_len):  # Don't infinite loop while learning
-            action = self.policy.select_action(self.env.get_state())
+            st = self.env.get_state()
+            action = self.policy.select_action(st)
             res, state, reward = self.env.act(action)
             self.policy.rewards.append(reward)
+            self.value.states.append(st)
             if res == 'FINISH':
                 break
 
@@ -70,31 +93,59 @@ class Trainer:
         return rew
 
     def reinforce(self):
-        R = 0
+        G = 0
         policy_loss = []
+        p_deltas = []
         gains = []
-        for r in self.policy.rewards[::-1]:
-            R = r + self.gamma * R
-            gains.insert(0, R)
-        gains = torch.tensor(gains)
-        gains = (gains - gains.mean()) / (gains.std() + 1e-6)
 
-        for log_prob, gain in zip(self.policy.saved_log_probs, gains):
-            policy_loss.append(-log_prob * gain)
+        rvalues = self.value.forward(torch.FloatTensor(self.value.states[::-1]))
+
+        for r, v in zip(self.policy.rewards[::-1], rvalues):
+            G = r + self.gamma * G
+            p_deltas.insert(0, G-v)
+            gains.append(G)
+        p_deltas = torch.tensor(p_deltas)
+        #gains = (gains - gains.mean()) / (gains.std() + 1e-6)
+
+        for log_prob, delta in zip(self.policy.saved_log_probs, p_deltas):
+            policy_loss.append(-log_prob * delta)
+
         self.opt.zero_grad()
+        self.value_opt.zero_grad()
+
         policy_loss = torch.cat(policy_loss).sum()
         policy_loss.backward()
 
+        value_loss = (torch.tensor(gains) - rvalues)**2
+        value_loss = value_loss.sum()
+        value_loss.backward()
+
+        self.opt.step()
+        self.value_opt.step()
+
         if self.writer is not None:
             self.writer.add_scalar('loss', policy_loss, self.iter)
-            self.writer.add_scalar('gain0', R, self.iter)
+            self.writer.add_scalar('gain0', G, self.iter)
             self.writer.add_scalar('episode_len', len(self.policy.rewards), self.iter)
+
+            self.writer.add_scalar('value_loss', value_loss, self.iter)
 
             for n, p in self.policy.named_parameters():
                 self.writer.add_scalar(n + '_grad', p.grad.norm(), self.iter)
                 self.writer.add_scalar(n, p.norm(), self.iter)
 
-        self.opt.step()
         self.policy.rewards.clear()
         self.policy.saved_log_probs.clear()
+        self.value.states.clear()
         self.iter += 1
+
+
+if __name__ == '__main__':
+    import race as R
+    rf_race = R.RaceTrack(R.track3,2)
+
+    policy = Policy(state_dims=len(rf_race.get_sizes()), n_actions=rf_race.N_ACTIONS, hidden=200)
+    value = Values(rf_race)
+    trainer = Trainer(rf_race, policy, value=value, lr=1e-3, max_len=200, gamma=0.99)
+    for k in range(1000):
+        trainer.run_episode()

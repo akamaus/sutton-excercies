@@ -50,7 +50,7 @@ class MonteCarlo(QPolicy):
         sa_dict = {}  # first visit
 
         # collecting episode
-        s = self.env.state
+        s = self.env.get_state()
         states.append(s)
         rewards.append(0)
         t = 0
