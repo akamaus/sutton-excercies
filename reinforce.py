@@ -40,10 +40,10 @@ class SpatialPolicy(nn.Module):
         super().__init__()
         szs = env.get_sizes()
         self.szs = szs
-        self.inp_size = szs[0]*szs[1] + szs[2]+szs[3]
+        self.inp_size = szs[0] + szs[1] + szs[2] + szs[3]
         n_actions = env.N_ACTIONS
 
-        self.affine1 = nn.Linear(szs[0]*szs[1] + szs[2]+szs[3], hidden)
+        self.affine1 = nn.Linear(self.inp_size, hidden)
         self.affine2 = nn.Linear(hidden, n_actions)
 
     def forward(self, x, t):
@@ -54,11 +54,17 @@ class SpatialPolicy(nn.Module):
     def select_action(self, state, t=1):
         x = torch.zeros([self.inp_size]).float()
         p0 = 0
-        x[state[0] * self.szs[1] + state[1]] = 1
-        p0 += self.szs[0]*self.szs[1]
+        x[p0 + state[0]] = 1
+        p0 += self.szs[0]
+
+        x[p0 + state[1]] = 1
+        p0 += self.szs[1]
+
         x[p0 + state[2]] = 1
         p0 += self.szs[2]
+
         x[p0 + state[3]] = 1
+
         assert len(state) == 4
 
         probs = self.forward(x.unsqueeze(0), t=t)
