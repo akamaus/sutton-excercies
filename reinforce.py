@@ -30,7 +30,7 @@ class Policy(nn.Module):
         probs = self.forward(state)
         m = Categorical(probs)
         action = m.sample()
-        return action.item(), m.log_prob(action)
+        return action.item(), m.log_prob(action), torch.sum(-probs * probs.log())
 
 
 class Values(nn.Module):
@@ -66,18 +66,22 @@ class Reinforce:
         self.running_reward = None
         self.iter = 0
 
-        self.saved_log_probs = []
+        self.actions = []
+        self.log_probs = []
+        self.entropies = []
         self.rewards = []
         self.states = []
 
-    def run_episode(self):
+    def run_episode(self, autoclear=True):
         self.env.reset()
         for t in range(self.max_len):  # Don't infinite loop while learning
             st = self.env.get_state()
-            action, log_prob = self.policy.select_action(st)
+            action, log_prob, entropy = self.policy.select_action(st)
             res, state, reward = self.env.act(action)
+            self.actions.append(action)
             self.rewards.append(reward)
-            self.saved_log_probs.append(log_prob)
+            self.log_probs.append(log_prob)
+            self.entropies.append(entropy)
             self.states.append(st)
             if res == 'FINISH':
                 break
@@ -90,34 +94,40 @@ class Reinforce:
 
         self.reinforce()
 
+        if autoclear:
+            self.clear_episode_stats()
+
+        self.iter += 1
+
         return rew
 
     def reinforce(self):
         G = 0
         policy_loss = []
         p_deltas = []
-        gains = []
+        rgains = []
 
         rvalues = self.value.forward(torch.FloatTensor(self.states[::-1]))
 
         for r, v in zip(self.rewards[::-1], rvalues):
             G = r + self.gamma * G
             p_deltas.append(G-v)
-            gains.append(G)
+#            print(G,v)
+            rgains.append(G)
         p_deltas = torch.tensor(p_deltas[::-1])
         #gains = (gains - gains.mean()) / (gains.std() + 1e-6)
 
-        for log_prob, delta in zip(self.saved_log_probs, p_deltas):
+        for log_prob, delta in zip(self.log_probs, p_deltas):
             policy_loss.append(-log_prob * delta)
 
         self.opt.zero_grad()
         self.value_opt.zero_grad()
 
-        policy_loss = torch.cat(policy_loss).sum()
+        policy_loss = torch.cat(policy_loss).mean()
         policy_loss.backward()
 
-        value_loss = (torch.tensor(gains) - rvalues)**2
-        value_loss = value_loss.sum()
+        value_loss = (torch.tensor(rgains) - rvalues)**2
+        value_loss = value_loss.mean()
         value_loss.backward()
 
         self.opt.step()
@@ -129,13 +139,17 @@ class Reinforce:
             self.writer.add_scalar('episode_len', len(self.rewards), self.iter)
 
             self.writer.add_scalar('value_loss', value_loss, self.iter)
+            self.writer.add_scalar('entropy', torch.tensor(self.entropies).mean(), self.iter)
 
             for n, p in self.policy.named_parameters():
                 self.writer.add_scalar(n + '_grad', p.grad.norm(), self.iter)
                 self.writer.add_scalar(n, p.norm(), self.iter)
 
+    def clear_episode_stats(self):
+        self.actions.clear()
         self.rewards.clear()
-        self.saved_log_probs.clear()
+        self.log_probs.clear()
+        self.entropies.clear()
         self.states.clear()
         self.iter += 1
 
