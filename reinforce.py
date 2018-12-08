@@ -77,18 +77,32 @@ class Values(nn.Module):
     def __init__(self, env, hidden=128):
         super().__init__()
         szs = env.get_sizes()
-        n_states = len(szs)
+        self.szs = szs
+        self.inp_size = szs[0] + szs[1] + szs[2] + szs[3]
 
-        self.inp_diap = torch.FloatTensor(szs)
-
-        self.affine1 = nn.Linear(n_states, hidden)
+        self.affine1 = nn.Linear(self.inp_size, hidden)
         self.affine2 = nn.Linear(hidden, 1)
 
-    def forward(self, x):
-        x = (x - self.inp_diap / 2) / self.inp_diap
+    def forward(self, states):
+        x = torch.zeros([len(states), self.inp_size]).float()
 
+        for i, state in enumerate(states):
+            p0 = 0
+            x[i, p0 + state[0]] = 1
+            p0 += self.szs[0]
+
+            x[i, p0 + state[1]] = 1
+            p0 += self.szs[1]
+
+            x[i, p0 + state[2]] = 1
+            p0 += self.szs[2]
+
+            x[i, p0 + state[3]] = 1
+
+        #print(x)
         x = F.relu(self.affine1(x))
         y = self.affine2(x)
+        #print(y)
         return y
 
 
@@ -118,7 +132,7 @@ class Reinforce:
         self.env.reset()
         for t in range(self.max_len):  # Don't infinite loop while learning
             st = self.env.get_state()
-            action, log_prob, entropy = self.policy.select_action(st, t=max(500 / (self.iter+1), 1))
+            action, log_prob, entropy = self.policy.select_action(st, t=max(1000 / (self.iter+1), 1))
             res, state, reward = self.env.act(action)
             self.actions.append(action)
             self.rewards.append(reward)
@@ -149,17 +163,14 @@ class Reinforce:
         p_deltas = []
         rgains = []
 
-        #rvalues = self.value.forward(torch.FloatTensor(self.states[::-1]))
+        rvalues = self.value.forward(self.states[::-1])
 
-        for r, s in zip(self.rewards[::-1], self.states[::-1]):
+        for r, v in zip(self.rewards[::-1], rvalues):
             G = r + self.gamma * G
-            delta = G - self.table_value[s[0], s[1], s[2], s[3]]
+            delta = G - v
             p_deltas.append(delta)
-#            print(G,v)
             rgains.append(G)
-            self.table_value[s[0], s[1], s[2], s[3]] += 0.1 * delta
         p_deltas = torch.tensor(p_deltas[::-1])
-        #gains = (gains - gains.mean()) / (gains.std() + 1e-6)
 
         for log_prob, delta in zip(self.log_probs, p_deltas):
             policy_loss.append(-log_prob * delta)
@@ -171,11 +182,10 @@ class Reinforce:
         policy_loss.backward()
         utils.clip_grad_norm(self.policy.parameters(), 5)
 
-
-
-        #value_loss = (torch.tensor(rgains) - rvalues)**2
-        #value_loss = value_loss.mean() - torch.tensor(self.entropies).mean()
-        #value_loss.backward()
+        value_loss = (torch.tensor(rgains) - rvalues)**2
+        value_loss = value_loss.mean()
+        value_loss.backward()
+        utils.clip_grad_norm(self.value.parameters(), 5)
 
         self.opt.step()
         self.value_opt.step()
@@ -185,8 +195,8 @@ class Reinforce:
             self.writer.add_scalar('gain0', G, self.iter)
             self.writer.add_scalar('episode_len', len(self.rewards), self.iter)
 
-            #self.writer.add_scalar('value_loss', value_loss, self.iter)
-            self.writer.add_scalar('mean_delta', torch.tensor(-p_deltas).abs().mean() , self.iter)
+            self.writer.add_scalar('value_loss', value_loss, self.iter)
+            #self.writer.add_scalar('mean_delta', torch.tensor(-p_deltas).abs().mean() , self.iter)
             self.writer.add_scalar('entropy', torch.tensor(self.entropies).mean(), self.iter)
 
             for n, p in self.policy.named_parameters():
