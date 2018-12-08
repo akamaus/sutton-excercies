@@ -18,8 +18,6 @@ class Policy(nn.Module):
 
         self.inp_diap = torch.FloatTensor(szs)
 
-        self.saved_log_probs = []
-        self.rewards = []
 
     def forward(self, x):
         x = (x - self.inp_diap / 2) / self.inp_diap
@@ -32,8 +30,7 @@ class Policy(nn.Module):
         probs = self.forward(state)
         m = Categorical(probs)
         action = m.sample()
-        self.saved_log_probs.append(m.log_prob(action))
-        return action.item()
+        return action.item(), m.log_prob(action)
 
 
 class Values(nn.Module):
@@ -47,8 +44,6 @@ class Values(nn.Module):
         self.affine1 = nn.Linear(n_states, hidden)
         self.affine2 = nn.Linear(hidden, 1)
 
-        self.states = []
-
     def forward(self, x):
         x = (x - self.inp_diap / 2) / self.inp_diap
 
@@ -57,7 +52,7 @@ class Values(nn.Module):
         return y
 
 
-class Trainer:
+class Reinforce:
     def __init__(self, env, policy, value=None, writer=None, lr=1e-3, max_len=1000, gamma=0.95):
         self.env = env
         self.policy = policy
@@ -71,18 +66,23 @@ class Trainer:
         self.running_reward = None
         self.iter = 0
 
+        self.saved_log_probs = []
+        self.rewards = []
+        self.states = []
+
     def run_episode(self):
         self.env.reset()
         for t in range(self.max_len):  # Don't infinite loop while learning
             st = self.env.get_state()
-            action = self.policy.select_action(st)
+            action, log_prob = self.policy.select_action(st)
             res, state, reward = self.env.act(action)
-            self.policy.rewards.append(reward)
-            self.value.states.append(st)
+            self.rewards.append(reward)
+            self.saved_log_probs.append(log_prob)
+            self.states.append(st)
             if res == 'FINISH':
                 break
 
-        rew = np.sum(self.policy.rewards)
+        rew = np.sum(self.rewards)
         if self.running_reward is None:
             self.running_reward = rew
         else:
@@ -98,16 +98,16 @@ class Trainer:
         p_deltas = []
         gains = []
 
-        rvalues = self.value.forward(torch.FloatTensor(self.value.states[::-1]))
+        rvalues = self.value.forward(torch.FloatTensor(self.states[::-1]))
 
-        for r, v in zip(self.policy.rewards[::-1], rvalues):
+        for r, v in zip(self.rewards[::-1], rvalues):
             G = r + self.gamma * G
-            p_deltas.insert(0, G-v)
+            p_deltas.append(G-v)
             gains.append(G)
-        p_deltas = torch.tensor(p_deltas)
+        p_deltas = torch.tensor(p_deltas[::-1])
         #gains = (gains - gains.mean()) / (gains.std() + 1e-6)
 
-        for log_prob, delta in zip(self.policy.saved_log_probs, p_deltas):
+        for log_prob, delta in zip(self.saved_log_probs, p_deltas):
             policy_loss.append(-log_prob * delta)
 
         self.opt.zero_grad()
@@ -126,7 +126,7 @@ class Trainer:
         if self.writer is not None:
             self.writer.add_scalar('loss', policy_loss, self.iter)
             self.writer.add_scalar('gain0', G, self.iter)
-            self.writer.add_scalar('episode_len', len(self.policy.rewards), self.iter)
+            self.writer.add_scalar('episode_len', len(self.rewards), self.iter)
 
             self.writer.add_scalar('value_loss', value_loss, self.iter)
 
@@ -134,9 +134,9 @@ class Trainer:
                 self.writer.add_scalar(n + '_grad', p.grad.norm(), self.iter)
                 self.writer.add_scalar(n, p.norm(), self.iter)
 
-        self.policy.rewards.clear()
-        self.policy.saved_log_probs.clear()
-        self.value.states.clear()
+        self.rewards.clear()
+        self.saved_log_probs.clear()
+        self.states.clear()
         self.iter += 1
 
 
