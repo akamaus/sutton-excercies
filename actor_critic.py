@@ -73,16 +73,16 @@ class AdvantageActorCritic:
             rewards.reverse()
             vs = self.value.forward(states)
 
-            policy_loss = torch.tensor(0.0)
-            value_loss = torch.tensor(0.0)
+            policy_loss = []
+            value_loss = []
 
             for lp, r, v in zip(log_probs, rewards, vs):  # iterating in reverse order
                 ret = r + ret * self.gamma
-                policy_loss -= lp * (ret - v.detach())
-                value_loss += (ret.detach() - v)**2
+                policy_loss.append(-lp * (ret - v.detach()))
+                value_loss.append((ret.detach() - v)**2)
 
-            policy_loss = policy_loss / len(states) - 5 * torch.tensor(entropies).mean()
-            value_loss /= len(states)
+            policy_loss = torch.stack(policy_loss).mean() - 5 * torch.tensor(entropies).mean()
+            value_loss = torch.stack(value_loss).mean()
 
             policy_loss.backward()
             value_loss.backward()
@@ -110,6 +110,7 @@ class AdvantageActorCritic:
 
     def clear_episode_stats(self):
         self.states.clear()
+        self.entropies.clear()
 
 
 if __name__ == '__main__':
