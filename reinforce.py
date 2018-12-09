@@ -52,6 +52,7 @@ class SpatialPolicy(nn.Module):
         return F.softmax(action_scores / t, dim=1)
 
     def select_action(self, state, t=1):
+        assert isinstance(state, tuple)
         x = torch.zeros([self.inp_size]).float()
         p0 = 0
         x[p0 + state[0]] = 1
@@ -70,10 +71,10 @@ class SpatialPolicy(nn.Module):
         probs = self.forward(x.unsqueeze(0), t=t)
         m = Categorical(probs)
         action = m.sample()
-        return action.item(), m.log_prob(action), torch.sum(-probs * probs.log())
+        return action.item(), m.log_prob(action)[0], torch.sum(-probs * probs.log())
 
 
-class Values(nn.Module):
+class SpatialValues(nn.Module):
     def __init__(self, env, hidden=128):
         super().__init__()
         szs = env.get_sizes()
@@ -84,6 +85,12 @@ class Values(nn.Module):
         self.affine2 = nn.Linear(hidden, 1)
 
     def forward(self, states):
+        if isinstance(states, tuple):
+            states = [states]
+            sole = True
+        else:
+            sole = False
+
         x = torch.zeros([len(states), self.inp_size]).float()
 
         for i, state in enumerate(states):
@@ -99,20 +106,21 @@ class Values(nn.Module):
 
             x[i, p0 + state[3]] = 1
 
-        #print(x)
         x = F.relu(self.affine1(x))
-        y = self.affine2(x)
-        #print(y)
+        y = self.affine2(x)[:, 0]
+        if sole:
+            y = y[0]
         return y
 
 
 class Reinforce:
-    def __init__(self, env, policy, value=None, writer=None, lr=1e-3, max_len=1000, gamma=0.95):
+    def __init__(self, env, policy, value=None, writer=None, lr=1e-3, max_len=1000, gamma=0.95, temperature=1):
         self.env = env
         self.policy = policy
         self.value = value
         self.max_len = max_len
         self.gamma = gamma
+        self.temperature = 1
 
         self.writer = writer
         self.opt = torch.optim.Adam(policy.parameters(), lr=lr)
@@ -132,7 +140,7 @@ class Reinforce:
         self.env.reset()
         for t in range(self.max_len):  # Don't infinite loop while learning
             st = self.env.get_state()
-            action, log_prob, entropy = self.policy.select_action(st, t=max(1000 / (self.iter+1), 1))
+            action, log_prob, entropy = self.policy.select_action(st, t=max(self.temperature / (self.iter + 1), 1))
             res, state, reward = self.env.act(action)
             self.actions.append(action)
             self.rewards.append(reward)
@@ -178,7 +186,7 @@ class Reinforce:
         self.opt.zero_grad()
         self.value_opt.zero_grad()
 
-        policy_loss = torch.cat(policy_loss).mean() - 1 * torch.tensor(self.entropies).mean()
+        policy_loss = torch.stack(policy_loss).mean() - 5 * torch.tensor(self.entropies).mean()
         policy_loss.backward()
         utils.clip_grad_norm(self.policy.parameters(), 5)
 
@@ -215,8 +223,8 @@ if __name__ == '__main__':
     import race as R
     rf_race = R.RaceTrack(R.track1, 2)
 
-    policy = Policy(state_dims=len(rf_race.get_sizes()), n_actions=rf_race.N_ACTIONS, hidden=200)
-    value = Values(rf_race)
+    policy = SpatialPolicy(rf_race, hidden=50)
+    value = SpatialValues(rf_race, hidden=50)
     trainer = Reinforce(rf_race, policy, value=value, lr=1e-3, max_len=200, gamma=0.99)
     for k in range(1000):
         trainer.run_episode()
