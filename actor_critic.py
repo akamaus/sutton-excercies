@@ -32,6 +32,9 @@ def multi_actor(env_constructor, policy, value, n_actors, n_episodes, writer=Non
                 print(se.value)
                 gens[i] = actors[i].gen_episode(autoclear=False)
 
+        utils.clip_grad_norm(policy.parameters(), 5)
+        utils.clip_grad_norm(value.parameters(), 5)
+
         policy_opt.step()
         value_opt.step()
 
@@ -137,18 +140,16 @@ class AdvantageActorCritic:
             policy_loss.backward()
             value_loss.backward()
 
-            utils.clip_grad_norm(self.policy.parameters(), 5)
-            utils.clip_grad_norm(self.value.parameters(), 5)
-
-            if self.async_mode:
-                yield
-            else:
-                self.policy_opt.step()
-                self.value_opt.step()
-
             self.total_policy_loss += policy_loss.item()
             self.total_value_loss += value_loss.item()
             self.n_backups += 1
+
+            if self.async_mode:
+                if not finish and (t_max is None or t < t_max):
+                    yield
+            else:
+                self.policy_opt.step()
+                self.value_opt.step()
 
         self.iter += 1
         self.episode_len = t
@@ -198,12 +199,12 @@ if __name__ == '__main__':
     policy = SpatialPolicy(ac_race, hidden=20)
     value = SpatialValues(ac_race, hidden=20)
 
-    if False:
-        writer = SummaryWriter('logs/aac_nactors1_lr0.01_tbackup500_tmax500_t500_ent10')
-        multi_actor(mk_race, policy, value, 1, 5000, writer=writer, lr=0.01, t_max=500, t_backup=500, temperature=500)
+    if True:
+        writer = SummaryWriter('logs/aac_nactors1_lr0.01_g0.99_tbackup10_tmax500_t1_ent10')
+        multi_actor(mk_race, policy, value, 1, 5000, writer=writer, lr=0.01, gamma=0.99, t_max=500, t_backup=10, temperature=1)
     else:
-        writer = SummaryWriter('logs/actor_critic_lr0.01_tbackup500_tmax500_t500_ent10')
-        trainer = AdvantageActorCritic(ac_race, policy, value=value, writer=writer, lr=1e-2, gamma=0.99, t_backup=500, t_max=500)
+        writer = SummaryWriter('logs/actor_critic_lr0.01_tbackup100_tmax500_t500_ent10')
+        trainer = AdvantageActorCritic(mk_race(), policy, value=value, writer=writer, lr=1e-2, gamma=0.99, t_max=500, t_backup=10, temperature=1)
         for k in range(2000):
             n_steps = trainer.run_episode()
             print(n_steps)
