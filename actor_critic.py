@@ -192,16 +192,17 @@ if __name__ == '__main__':
 
     def mk_race():
         import race as R
-        return R.RaceTrack(R.track3, 2)
+        return R.RaceTrack(R.track5, 5)
 
     ac_race = mk_race()
+
 
     policy = SpatialPolicy(ac_race, hidden=20)
     value = SpatialValues(ac_race, hidden=20)
 
     if True:
-        writer = SummaryWriter('logs/aac_nactors1_lr0.01_g0.99_tbackup10_tmax500_t1_ent10')
-        multi_actor(mk_race, policy, value, 1, 5000, writer=writer, lr=0.01, gamma=0.99, t_max=500, t_backup=10, temperature=1)
+        writer = SummaryWriter('logs/aac_track5s5_nactors10_lr0.01_g1_tbackup8_tmax500_t1_ent10_try2')
+        multi_actor(mk_race, policy, value, 10, 5000, writer=writer, lr=0.01, gamma=1, t_max=500, t_backup=8, temperature=1)
     else:
         writer = SummaryWriter('logs/actor_critic_lr0.01_tbackup100_tmax500_t500_ent10')
         trainer = AdvantageActorCritic(mk_race(), policy, value=value, writer=writer, lr=1e-2, gamma=0.99, t_max=500, t_backup=10, temperature=1)

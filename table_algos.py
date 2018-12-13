@@ -55,6 +55,8 @@ class MonteCarlo(QPolicy):
         rewards.append(0)
         t = 0
         while True:
+            if t > 500:
+                break
             a = self.eps_policy(s)
             res, s2, rew = self.env.act(a)
             states.append(s2)

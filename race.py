@@ -164,7 +164,7 @@ class RaceTrack:
         self.vel[1] = self.trim_vel(self.vel[1])
 
         finished = False
-        reward = -1
+        reward = -1.0
 
         rvel = list(self.vel)
         while rvel[0] != 0 or rvel[1] != 0:
