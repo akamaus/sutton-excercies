@@ -1,116 +1,9 @@
 import numpy as np
 
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 import torch.nn.utils as utils
-from torch.distributions import Categorical
 
-
-class Policy(nn.Module):
-    def __init__(self, env, hidden=128):
-        super().__init__()
-        szs = env.get_sizes()
-        state_dims = len(szs)
-        n_actions = env.N_ACTIONS
-
-        self.affine1 = nn.Linear(state_dims, hidden)
-        self.affine2 = nn.Linear(hidden, n_actions)
-
-        self.inp_diap = torch.FloatTensor(szs)
-
-
-    def forward(self, x, t):
-        x = (x - self.inp_diap / 2) / self.inp_diap
-        x = F.relu(self.affine1(x))
-        action_scores = self.affine2(x)
-        return F.softmax(action_scores / t, dim=1)
-
-    def select_action(self, state, t=1):
-        state = torch.FloatTensor(state).unsqueeze(0)
-        probs = self.forward(state, t=t)
-        m = Categorical(probs)
-        action = m.sample()
-        return action.item(), m.log_prob(action), torch.sum(-probs * probs.log())
-
-
-class SpatialPolicy(nn.Module):
-    """ Policy with separate input neuron for each spatial state and axe velocity """
-    def __init__(self, env, hidden=128):
-        super().__init__()
-        szs = env.get_sizes()
-        self.szs = szs
-        self.inp_size = szs[0] + szs[1] + szs[2] + szs[3]
-        n_actions = env.N_ACTIONS
-
-        self.affine1 = nn.Linear(self.inp_size, hidden)
-        self.affine2 = nn.Linear(hidden, n_actions)
-
-    def forward(self, x, t):
-        x = F.relu(self.affine1(x))
-        action_scores = self.affine2(x)
-        return F.softmax(action_scores / t, dim=1)
-
-    def select_action(self, state, t=1):
-        assert isinstance(state, tuple)
-        x = torch.zeros([self.inp_size]).float()
-        p0 = 0
-        x[p0 + state[0]] = 1
-        p0 += self.szs[0]
-
-        x[p0 + state[1]] = 1
-        p0 += self.szs[1]
-
-        x[p0 + state[2]] = 1
-        p0 += self.szs[2]
-
-        x[p0 + state[3]] = 1
-
-        assert len(state) == 4
-
-        probs = self.forward(x.unsqueeze(0), t=t)
-        m = Categorical(probs)
-        action = m.sample()
-        return action.item(), m.log_prob(action)[0], torch.sum(-probs * probs.log())
-
-
-class SpatialValues(nn.Module):
-    def __init__(self, env, hidden=128):
-        super().__init__()
-        szs = env.get_sizes()
-        self.szs = szs
-        self.inp_size = szs[0] + szs[1] + szs[2] + szs[3]
-
-        self.affine1 = nn.Linear(self.inp_size, hidden)
-        self.affine2 = nn.Linear(hidden, 1)
-
-    def forward(self, states):
-        if isinstance(states, tuple):
-            states = [states]
-            sole = True
-        else:
-            sole = False
-
-        x = torch.zeros([len(states), self.inp_size]).float()
-
-        for i, state in enumerate(states):
-            p0 = 0
-            x[i, p0 + state[0]] = 1
-            p0 += self.szs[0]
-
-            x[i, p0 + state[1]] = 1
-            p0 += self.szs[1]
-
-            x[i, p0 + state[2]] = 1
-            p0 += self.szs[2]
-
-            x[i, p0 + state[3]] = 1
-
-        x = F.relu(self.affine1(x))
-        y = self.affine2(x)[:, 0]
-        if sole:
-            y = y[0]
-        return y
+from approximators import SpatialPolicy, SpatialValue
 
 
 class Reinforce:
@@ -171,7 +64,7 @@ class Reinforce:
         p_deltas = []
         rgains = []
 
-        rvalues = self.value.forward(self.states[::-1])
+        rvalues = self.value.compute_value(self.states[::-1])
 
         for r, v in zip(self.rewards[::-1], rvalues):
             G = r + self.gamma * G
@@ -223,8 +116,8 @@ if __name__ == '__main__':
     import race as R
     rf_race = R.RaceTrack(R.track1, 2)
 
-    policy = SpatialPolicy(rf_race, hidden=50)
-    value = SpatialValues(rf_race, hidden=50)
+    policy = SpatialPolicy(rf_race, n_hidden=50)
+    value = SpatialValue(rf_race, n_hidden=50)
     trainer = Reinforce(rf_race, policy, value=value, lr=1e-3, max_len=200, gamma=0.99)
     for k in range(1000):
         trainer.run_episode()

@@ -66,21 +66,30 @@ class AdvantageActorCritic:
         self.total_value_loss = 0
         self.n_backups = 0
         self.episode_len = 0
+        self.gain = 0
 
     def run_episode(self):
         assert self.async_mode is False
         gen = self.gen_episode()
         try:
-            next(gen)
-            assert False
+            while True:
+                next(gen)
         except StopIteration as se:
-            return se.value
+            rew = se.value
+            if self.running_reward is None:
+                self.running_reward = rew
+            else:
+                self.running_reward = self.running_reward * 0.99 + rew * 0.01
+            return rew
 
     def gen_episode(self, t_max=None, autoclear=True):
         if t_max is None:
             t_max = self.t_max
 
         self.env.reset()
+
+        if autoclear:
+            self.clear_episode_stats()
 
         t = 1
         finish = False
@@ -112,6 +121,7 @@ class AdvantageActorCritic:
 
                 self.entropies.append(entropy.detach())
                 self.states.append(st)
+                self.gain += reward
 
                 t += 1
 
@@ -119,12 +129,12 @@ class AdvantageActorCritic:
                 ret = torch.tensor(0.0)
             else:
                 with torch.no_grad():
-                    ret = self.value.forward(st)
+                    ret = self.value.compute_value(st)
 
             states.reverse()
             log_probs.reverse()
             rewards.reverse()
-            vs = self.value.forward(states)
+            vs = self.value.compute_value(states)
 
             policy_loss = []
             value_loss = []
@@ -157,10 +167,7 @@ class AdvantageActorCritic:
         if self.writer is not None:
             self.log_episode_stats()
 
-        if autoclear:
-            self.clear_episode_stats()
-
-        return t
+        return self.gain
 
     def log_episode_stats(self, writer=None, iter=None):
         if writer is None:
@@ -182,10 +189,12 @@ class AdvantageActorCritic:
         self.total_value_loss = 0
         self.n_backups = 0
         self.episode_len = 0
+        self.gain = 0
 
 
 if __name__ == '__main__':
-    from reinforce import SpatialPolicy, SpatialValues
+    from reinforce import SpatialValues
+    from approximators import SpatialPolicy
     from tensorboardX import SummaryWriter
 
     torch.random.manual_seed(0)
@@ -197,7 +206,7 @@ if __name__ == '__main__':
     ac_race = mk_race()
 
 
-    policy = SpatialPolicy(ac_race, hidden=20)
+    policy = SpatialPolicy(ac_race, n_hidden=20)
     value = SpatialValues(ac_race, hidden=20)
 
     if True:
