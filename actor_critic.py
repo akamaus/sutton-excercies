@@ -1,6 +1,8 @@
 import torch
 import torch.nn.utils as utils
 
+import numpy as np
+
 
 def multi_actor(env_constructor, policy, value, n_actors, n_episodes, writer=None, lr=0.01, **kargs):
     policy_opt = torch.optim.Adam(policy.parameters(), lr=lr)
@@ -37,6 +39,8 @@ def multi_actor(env_constructor, policy, value, n_actors, n_episodes, writer=Non
 
         policy_opt.step()
         value_opt.step()
+
+    return np.mean([a.running_reward for a in actors])
 
 
 class AdvantageActorCritic:

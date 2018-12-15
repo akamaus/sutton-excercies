@@ -67,6 +67,16 @@ class TestActorCriticTraining(TestCase):
         print('mean reward ac_small_spatial', trainer.running_reward)
         self.assertGreater(rew, -30)
 
+    def test_multiactor_spatial(self):
+        race = R.RaceTrack(R.track1, 2)
+        policy = A.SpatialPolicy(race, n_hidden=10)
+        value = A.SpatialValue(race, n_hidden=10)
+
+        gain = AC.multi_actor(lambda: R.RaceTrack(R.track1, 2), policy, value, n_actors=10, n_episodes=1000, lr=0.01, gamma=1)
+
+        print('mean reward ac_small_spatial', gain)
+        self.assertGreater(gain, -10)
+
 
 if __name__ == '__main__':
     main()
