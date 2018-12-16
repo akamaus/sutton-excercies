@@ -5,6 +5,19 @@ from torch.distributions import Categorical
 from torch.nn import functional as F
 
 
+class ScalingEncoder:
+    def __init__(self, diaps):
+        self.enc_size = len(diaps)
+        self.inp_diap = torch.FloatTensor(diaps)
+        self.theta1 = 2 / (self.inp_diap[:, 1] - self.inp_diap[:, 0])
+        self.theta2 = 1 - self.theta1 * self.inp_diap[:, 1]
+
+    def encode(self, states):
+        x = torch.FloatTensor(states)
+        x = self.theta1 * x + self.theta2
+        return x
+
+
 class SpatialEncoder:
     def __init__(self, sizes):
         self.enc_size = np.sum(sizes)
@@ -80,6 +93,16 @@ class SpatialPolicy(BasePolicy):
         super().__init__(self.input_encoder.enc_size, n_actions, n_hidden=n_hidden)
 
 
+class ScaledPolicy(BasePolicy):
+    """ Policy with separate input neuron for each spatial state and axe velocity """
+    def __init__(self, env, diaps, n_hidden=128):
+        st0 = env.get_state()
+        assert len(st0) == len(diaps)
+        n_actions = env.N_ACTIONS
+        self.input_encoder = ScalingEncoder(diaps)
+        super().__init__(self.input_encoder.enc_size, n_actions, n_hidden=n_hidden)
+
+
 class BaseValue(nn.Module):
     def __init__(self, n_inputs, n_hidden):
         super().__init__()
@@ -124,3 +147,12 @@ class SpatialValue(BaseValue):
         szs = env.get_sizes()
         self.input_encoder = SpatialEncoder(szs)
         super().__init__(self.input_encoder.enc_size, n_hidden)
+
+
+class ScaledValue(BaseValue):
+    """ Policy with separate input neuron for each spatial state and axe velocity """
+    def __init__(self, env, diaps, n_hidden=128):
+        st0 = env.get_state()
+        assert len(st0) == len(diaps)
+        self.input_encoder = ScalingEncoder(diaps)
+        super().__init__(self.input_encoder.enc_size, n_hidden=n_hidden)

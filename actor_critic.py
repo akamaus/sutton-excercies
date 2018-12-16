@@ -4,7 +4,7 @@ import torch.nn.utils as utils
 import numpy as np
 
 
-def multi_actor(env_constructor, policy, value, n_actors, n_episodes, writer=None, lr=0.01, **kargs):
+def multi_actor(env_constructor, policy, value, n_actors, n_episodes, writer=None, lr=0.01, gain_target=None, **kargs):
     policy_opt = torch.optim.Adam(policy.parameters(), lr=lr)
     value_opt = torch.optim.Adam(value.parameters(), lr=lr)
 
@@ -15,9 +15,10 @@ def multi_actor(env_constructor, policy, value, n_actors, n_episodes, writer=Non
         env = env_constructor()
         actor = AdvantageActorCritic(env, policy, value, async_mode=True, **kargs)
         actors.append(actor)
-        gens.append(actor.gen_episode(autoclear=False))
+        gens.append(actor.gen_episode(difficulty=0.001, autoclear=False))
 
     n_finished = 0
+    gains = []
 
     while n_finished < n_episodes:
         policy_opt.zero_grad()
@@ -28,11 +29,18 @@ def multi_actor(env_constructor, policy, value, n_actors, n_episodes, writer=Non
                 next(g)
             except StopIteration as se:
                 n_finished += 1
+                difficulty = min(n_finished / 1000, 0.1)
                 if writer is not None:
                     actors[i].log_episode_stats(writer, n_finished)
+                    writer.add_scalar('difficulty', difficulty, n_finished)
                 actors[i].clear_episode_stats()
+                gain = se.value
+                gains.append(gain)
+                if gain_target is not None and gain > gain_target:
+                    print('target achieved', gain)
+                    return
                 print(se.value)
-                gens[i] = actors[i].gen_episode(autoclear=False)
+                gens[i] = actors[i].gen_episode(autoclear=False, difficulty=difficulty)
 
         utils.clip_grad_norm(policy.parameters(), 5)
         utils.clip_grad_norm(value.parameters(), 5)
@@ -40,7 +48,7 @@ def multi_actor(env_constructor, policy, value, n_actors, n_episodes, writer=Non
         policy_opt.step()
         value_opt.step()
 
-    return np.mean([a.running_reward for a in actors])
+    return np.mean(gains)
 
 
 class AdvantageActorCritic:
@@ -86,11 +94,11 @@ class AdvantageActorCritic:
                 self.running_reward = self.running_reward * 0.99 + rew * 0.01
             return rew
 
-    def gen_episode(self, t_max=None, autoclear=True):
+    def gen_episode(self, t_max=None, difficulty=None, autoclear=True):
         if t_max is None:
             t_max = self.t_max
 
-        self.env.reset()
+        self.env.reset(difficulty=difficulty)
 
         if autoclear:
             self.clear_episode_stats()
@@ -185,6 +193,7 @@ class AdvantageActorCritic:
         writer.add_scalar('value_loss', self.total_value_loss / self.n_backups, iter)
         writer.add_scalar('entropy', torch.tensor(self.entropies).mean(), iter)
         writer.add_scalar('episode_len', self.episode_len, iter)
+        writer.add_scalar('gain', self.gain, iter)
 
     def clear_episode_stats(self):
         self.states.clear()
