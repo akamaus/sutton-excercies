@@ -2,9 +2,9 @@ import torch
 import torch.nn.utils as utils
 
 import numpy as np
+import random
 
-
-def multi_actor(env_constructor, policy, value, n_actors, n_episodes, writer=None, lr=0.01, gain_target=None, **kargs):
+def multi_actor(env_constructor, policy, value, n_actors, n_episodes, writer=None, lr=0.01, t_max=None, gain_target=None, difficulty=None, max_difficulty=None, **kargs):
     policy_opt = torch.optim.Adam(policy.parameters(), lr=lr)
     value_opt = torch.optim.Adam(value.parameters(), lr=lr)
 
@@ -15,7 +15,7 @@ def multi_actor(env_constructor, policy, value, n_actors, n_episodes, writer=Non
         env = env_constructor()
         actor = AdvantageActorCritic(env, policy, value, async_mode=True, **kargs)
         actors.append(actor)
-        gens.append(actor.gen_episode(difficulty=0.001, autoclear=False))
+        gens.append(actor.gen_episode(difficulty=0.001, autoclear=False, t_max=t_max*random.uniform(0.8, 1.2)))
 
     n_finished = 0
     gains = []
@@ -29,10 +29,13 @@ def multi_actor(env_constructor, policy, value, n_actors, n_episodes, writer=Non
                 next(g)
             except StopIteration as se:
                 n_finished += 1
-                difficulty = min(n_finished / 1000, 0.1)
+                if max_difficulty is not None:
+                    df = min(difficulty + (max_difficulty - difficulty) / 200 * n_finished, max_difficulty)
+                else:
+                    df = difficulty
                 if writer is not None:
                     actors[i].log_episode_stats(writer, n_finished)
-                    writer.add_scalar('difficulty', difficulty, n_finished)
+                    writer.add_scalar('difficulty', df, n_finished)
                 actors[i].clear_episode_stats()
                 gain = se.value
                 gains.append(gain)
@@ -40,7 +43,7 @@ def multi_actor(env_constructor, policy, value, n_actors, n_episodes, writer=Non
                     print('target achieved', gain)
                     return
                 print(se.value)
-                gens[i] = actors[i].gen_episode(autoclear=False, difficulty=difficulty)
+                gens[i] = actors[i].gen_episode(autoclear=False, difficulty=df, t_max=t_max*random.uniform(0.8, 1.2))
 
         utils.clip_grad_norm(policy.parameters(), 5)
         utils.clip_grad_norm(value.parameters(), 5)
@@ -179,7 +182,7 @@ class AdvantageActorCritic:
         if self.writer is not None:
             self.log_episode_stats()
 
-        return self.gain
+        return self.gain / t
 
     def log_episode_stats(self, writer=None, iter=None):
         if writer is None:

@@ -64,7 +64,7 @@ class PoleBalancer:
     def act(self, a):
         assert isinstance(a, int)
         assert 0 <= a <= 11
-        f = (a - 5) / 11.0 * 100.0
+        f = (a - 5) / 11.0 * 200.0
         self.engine_force = f
         self.move(0.001)
         a = self.angle % (2*pi)
@@ -87,9 +87,7 @@ class App(QMainWindow):
         self.car = PoleBalancer(5, 2, 0.05)
         self.car.reset(difficulty)
         self.policy = policy
-        self.initUI()
 
-    def initUI(self):
         self.title = 'PyQt paint - pythonspot.com'
         self.left = 10
         self.top = 10
@@ -110,6 +108,8 @@ class App(QMainWindow):
         self.m.move(0, 0)
         self.m.resize(self.width, self.height)
 
+        self.external_force = None
+
         self.m.set_car(self.car)
 
         self.show()
@@ -120,10 +120,11 @@ class App(QMainWindow):
 
     def redraw(self):
         rew = None
-        if self.policy:
+        if self.external_force is None and self.policy:
             act, prob, ent = self.policy.select_action(self.car.get_state())
             _, _, rew = self.car.act(act)
         else:
+            self.car.engine_force = self.external_force or 0
             self.car.move(0.001)
 
         self.m.update()
@@ -135,9 +136,9 @@ class App(QMainWindow):
             if event.buttons() != QtCore.Qt.NoButton:
                 p = (event.pos().x() / self.size().width() - 0.5) * 100
                 print(p)
-                self.car.engine_force = p
+                self.external_force = p
             else:
-                self.car.engine_force = 0
+                self.external_force = None
         return QMainWindow.eventFilter(self, source, event)
 
 
@@ -161,8 +162,7 @@ def run_visualizer(policy=None, difficulty=0.001):
     app = QApplication(sys.argv)
     ex = App(policy, difficulty)
 
-    if policy is None:
-        app.installEventFilter(ex)
+    app.installEventFilter(ex)
 
     timer = QTimer()
     timer.timeout.connect(ex.redraw)
