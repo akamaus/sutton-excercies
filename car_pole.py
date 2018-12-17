@@ -18,7 +18,7 @@ class PoleBalancer:
         self.reset()
 
     def reset(self, difficulty=1.0):
-        self.x_coord = random.uniform(0, 1)
+        self.x_coord = random.uniform(0.2, 0.8)
         self.angle = random.gauss(0, difficulty)
         self.x_velocity = random.gauss(0, difficulty)
         self.angle_velocity = 10*random.gauss(0, difficulty)
@@ -54,9 +54,14 @@ class PoleBalancer:
         if self.x_coord < 0:
             self.x_coord = 0
             self.x_velocity *= -0.9
+            collision = True
         elif self.x_coord > 1:
             self.x_coord = 1
             self.x_velocity *= -0.9
+            collision = True
+        else:
+            collision = False
+        return collision
 
     def get_state(self):
         return self.x_coord, self.angle % (2*pi), self.x_velocity, self.angle_velocity
@@ -66,9 +71,14 @@ class PoleBalancer:
         assert 0 <= a <= 11
         f = (a - 5) / 11.0 * 200.0
         self.engine_force = f
-        self.move(0.001)
+        collision = self.move(0.001)
+        if collision:
+            penalty = 100
+        else:
+            penalty = 0
+
         a = self.angle % (2*pi)
-        reward = - min(abs(a), abs(2*pi - a))
+        reward = - min(abs(a), abs(2*pi - a)) - penalty
         return 'CONT', self.get_state(), reward
 
 
@@ -192,6 +202,22 @@ if __name__ == '__main__':
         policy = A.ScaledPolicy(task, diaps, n_hidden=10)
         value = A.ScaledValue(task, diaps, n_hidden=10)
 
-        gain = AC.multi_actor(PoleBalancer, policy, value, n_actors=10, n_episodes=1, t_max = 2000, lr=0.01, gamma=1)
+        gain = AC.multi_actor(PoleBalancer, policy, value, n_actors=10, n_episodes=1, t_max=2000, lr=0.01, gamma=1)
+    elif args.mode == 'curriculum':
+        from tensorboardX import SummaryWriter
+        import approximators as A
+        import actor_critic as AC
+
+        task = PoleBalancer()
+
+        diaps = [(0,1),  # x_coord = 0.5
+                 (0, 0.2*pi),  # angle = 0.01
+                 (-2, 2),  # x_velocity = 0
+                 (-50, 50)]  # angle_velocity = 0
+
+        policy = A.ScaledPolicy(task, diaps, n_hidden=10)
+        value = A.ScaledValue(task, diaps, n_hidden=10)
+        writer = SummaryWriter('logs/carpole-penalty100-mforce200-scaled-h20-scaled-h20-tbackup50-tmax5000rnd-df0.001-curriculum')
+        gain = AC.multi_actor(PoleBalancer, policy, value, writer=writer, n_actors=10, n_episodes=100000, t_max=5000, t_backup=50, lr=0.01, gamma=0.99, difficulty=0.001, max_difficulty=None, gain_target=-0.05)
 
 

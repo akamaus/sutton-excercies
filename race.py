@@ -138,10 +138,12 @@ class RaceTrack:
     def get_sizes(self):
         return self.rsize, self.csize, self.max_speed*2+1, self.max_speed*2+1
 
-    def reset(self):
+    def reset(self, difficulty=None):
         self.pos = list(random.choice(list(self.start_states)))
         self.vel = [0, 0]
         self.state_log = []
+        if difficulty is not None:
+            print('Warning, ignoring passed difficulty argument')
 
     def trim_vel(self, v):
         return min(self.max_speed, max(-self.max_speed, v))

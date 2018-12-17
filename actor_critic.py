@@ -4,21 +4,30 @@ import torch.nn.utils as utils
 import numpy as np
 import random
 
-def multi_actor(env_constructor, policy, value, n_actors, n_episodes, writer=None, lr=0.01, t_max=None, gain_target=None, difficulty=None, max_difficulty=None, **kargs):
+def multi_actor(env_constructor, policy, value, n_actors, n_episodes, writer=None, lr=0.01, t_max=None, gain_target=None, difficulty=None, max_difficulty=None, difficulty_gain_period=10**9, difficulty_gain_step=0.05, **kargs):
     policy_opt = torch.optim.Adam(policy.parameters(), lr=lr)
     value_opt = torch.optim.Adam(value.parameters(), lr=lr)
 
     actors = []
     gens = []
 
+    def gen_t_max():
+        if t_max is None:
+            rnd_t_max = None
+        else:
+            rnd_t_max = t_max*random.uniform(0.8, 1.2)
+        return rnd_t_max
+
+
     for k in range(n_actors):
         env = env_constructor()
         actor = AdvantageActorCritic(env, policy, value, async_mode=True, **kargs)
         actors.append(actor)
-        gens.append(actor.gen_episode(difficulty=0.001, autoclear=False, t_max=t_max*random.uniform(0.8, 1.2)))
+        gens.append(actor.gen_episode(difficulty=difficulty, autoclear=False, t_max=gen_t_max()))
 
     n_finished = 0
     gains = []
+    last_levelup = 0
 
     while n_finished < n_episodes:
         policy_opt.zero_grad()
@@ -30,7 +39,7 @@ def multi_actor(env_constructor, policy, value, n_actors, n_episodes, writer=Non
             except StopIteration as se:
                 n_finished += 1
                 if max_difficulty is not None:
-                    df = min(difficulty + (max_difficulty - difficulty) / 200 * n_finished, max_difficulty)
+                    df = min(difficulty + (max_difficulty - difficulty) / difficulty_gain_period * n_finished, max_difficulty)
                 else:
                     df = difficulty
                 if writer is not None:
@@ -39,11 +48,13 @@ def multi_actor(env_constructor, policy, value, n_actors, n_episodes, writer=Non
                 actors[i].clear_episode_stats()
                 gain = se.value
                 gains.append(gain)
-                if gain_target is not None and gain > gain_target:
-                    print('target achieved', gain)
-                    return
+                if gain_target is not None and np.mean(gains[-10:]) > gain_target and n_finished - last_levelup > n_actors:
+                    difficulty += difficulty_gain_step
+                    last_levelup = n_finished
+                    print('target gain', gain, 'achieved, raising difficulty to', difficulty)
+
                 print(se.value)
-                gens[i] = actors[i].gen_episode(autoclear=False, difficulty=df, t_max=t_max*random.uniform(0.8, 1.2))
+                gens[i] = actors[i].gen_episode(autoclear=False, difficulty=df, t_max=gen_t_max())
 
         utils.clip_grad_norm(policy.parameters(), 5)
         utils.clip_grad_norm(value.parameters(), 5)
@@ -82,6 +93,7 @@ class AdvantageActorCritic:
         self.n_backups = 0
         self.episode_len = 0
         self.gain = 0
+        self.energy_spent = 0
 
     def run_episode(self):
         assert self.async_mode is False
@@ -137,6 +149,7 @@ class AdvantageActorCritic:
                 self.entropies.append(entropy.detach())
                 self.states.append(st)
                 self.gain += reward
+                self.energy_spent += abs(action - self.env.N_ACTIONS // 2)
 
                 t += 1
 
@@ -197,6 +210,7 @@ class AdvantageActorCritic:
         writer.add_scalar('entropy', torch.tensor(self.entropies).mean(), iter)
         writer.add_scalar('episode_len', self.episode_len, iter)
         writer.add_scalar('gain', self.gain, iter)
+        writer.add_scalar('mean_power', self.energy_spent / self.episode_len, iter)
 
     def clear_episode_stats(self):
         self.states.clear()
@@ -206,6 +220,7 @@ class AdvantageActorCritic:
         self.n_backups = 0
         self.episode_len = 0
         self.gain = 0
+        self.energy_spent = 0
 
 
 if __name__ == '__main__':

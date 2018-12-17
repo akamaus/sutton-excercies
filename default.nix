@@ -21,6 +21,7 @@ let
       pyqt5
       python
       pytorchWithCuda
+      snakeviz
       tensorboardX
     ]);
 
