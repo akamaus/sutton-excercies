@@ -80,4 +80,10 @@ class TestActorCriticTraining(TestCase):
 
 
 if __name__ == '__main__':
+    race = R.RaceTrack(R.track1, 2)
+    policy = A.SpatialPolicy(race, n_hidden=10)
+    value = A.SpatialValue(race, n_hidden=10)
+
+    gain = AC.multi_actor(lambda: R.RaceTrack(R.track1, 2), policy, value, n_actors=10, n_episodes=1000, lr=0.01, gamma=1)
+
     main()

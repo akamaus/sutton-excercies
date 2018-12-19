@@ -1,8 +1,12 @@
+#!/usr/bin/env python3
+
 from math import sin, cos, pi
 import random
 
+
 class PoleBalancer:
     N_ACTIONS = 11
+    MAX_FORCE = 100
 
     def __init__(self, car_mass=5, pole_mass=2, pole_length=0.05):
         self.car_mass = car_mass
@@ -69,7 +73,7 @@ class PoleBalancer:
     def act(self, a):
         assert isinstance(a, int)
         assert 0 <= a <= 11
-        f = (a - 5) / 11.0 * 200.0
+        f = (a - 5) / 11.0 * self.MAX_FORCE
         self.engine_force = f
         collision = self.move(0.001)
         if collision:
@@ -129,7 +133,7 @@ class App(QMainWindow):
         self.policy = policy
 
     def redraw(self):
-        rew = None
+        rew = 0
         if self.external_force is None and self.policy:
             act, prob, ent = self.policy.select_action(self.car.get_state())
             _, _, rew = self.car.act(act)
@@ -139,7 +143,7 @@ class App(QMainWindow):
 
         self.m.update()
         self.k += 1
-        print(self.k, 'reward', rew, 'force', self.car.engine_force,  'x_vel', self.car.x_velocity, 'angle_vel', self.car.angle_velocity, 'angle', self.car.angle)
+        print(f'{self.k}: reward {rew:6.2f} force {self.car.engine_force:6.2f} x_vel {self.car.x_velocity:6.2f} angle_vel {self.car.angle_velocity:6.2f} angle {self.car.angle:5.1f}')
 
     def eventFilter(self, source, event):
         if event.type() == QtCore.QEvent.MouseMove:
@@ -182,42 +186,60 @@ def run_visualizer(policy=None, difficulty=0.001):
 
 if __name__ == '__main__':
     from argparse import ArgumentParser
+    import approximators as A
+    import torch
+
     parser = ArgumentParser()
-    parser.add_argument('mode', choices=['demo', 'train'])
+    parser.add_argument('--id', type=int)
+    parser.add_argument('--num-layers', type=int, default=2)
+    parser.add_argument('--hidden', type=int, default=20)
+    parser.add_argument('--trainer', choices='baac maac'.split())
+    parser.add_argument('--load-policy', help='initialize policy from file')
+    parser.add_argument('mode', choices=['demo', 'train', 'curriculum'])
     args = parser.parse_args()
+
+    task = PoleBalancer()
+
+    diaps = [(0, 1),  # x_coord = 0.5
+             (0, 0.2 * pi),  # angle = 0.01
+             (-2, 2),  # x_velocity = 0
+             (-50, 50)]  # angle_velocity = 0
+
+    p_hidden = args.hidden
+    v_hidden = args.hidden
+    n_actors = 10
+    t_backup = 50
+
+    policy = A.ScaledPolicy(task, diaps, n_hidden=p_hidden)
+    value = A.ScaledValue(task, diaps, n_hidden=v_hidden)
+
     if args.mode == 'demo':
-        res = run_visualizer()
+        if args.load_policy is not None:
+            policy_state = torch.load(args.load_policy)
+            policy.load_state_dict(policy_state)
+        else:
+            policy = None
+        res = run_visualizer(policy)
         sys.exit(res)
-    elif args.mode == 'train':
-        import approximators as A
-        import actor_critic as AC
-
-        task = PoleBalancer()
-
-        diaps = [(0,1),  # x_coord = 0.5
-                 (0, 0.2*pi),  # angle = 0.01
-                 (-2, 2),  # x_velocity = 0
-                 (-50, 50)]  # angle_velocity = 0
-
-        policy = A.ScaledPolicy(task, diaps, n_hidden=10)
-        value = A.ScaledValue(task, diaps, n_hidden=10)
-
-        gain = AC.multi_actor(PoleBalancer, policy, value, n_actors=10, n_episodes=1, t_max=2000, lr=0.01, gamma=1)
-    elif args.mode == 'curriculum':
+    else:
         from tensorboardX import SummaryWriter
-        import approximators as A
         import actor_critic as AC
 
-        task = PoleBalancer()
+        writer = SummaryWriter(f'logs/{args.id}-{args.trainer}-carpole-actors{n_actors}-penalty100-mforce200-scaled-h{p_hidden}-scaled-h{v_hidden}-tbackup50-tmax5000rnd-df0.001-g1-{args.mode}')
 
-        diaps = [(0,1),  # x_coord = 0.5
-                 (0, 0.2*pi),  # angle = 0.01
-                 (-2, 2),  # x_velocity = 0
-                 (-50, 50)]  # angle_velocity = 0
-
-        policy = A.ScaledPolicy(task, diaps, n_hidden=10)
-        value = A.ScaledValue(task, diaps, n_hidden=10)
-        writer = SummaryWriter('logs/carpole-penalty100-mforce200-scaled-h20-scaled-h20-tbackup50-tmax5000rnd-df0.001-curriculum')
-        gain = AC.multi_actor(PoleBalancer, policy, value, writer=writer, n_actors=10, n_episodes=100000, t_max=5000, t_backup=50, lr=0.01, gamma=0.99, difficulty=0.001, max_difficulty=None, gain_target=-0.05)
-
-
+    if args.mode == 'train':
+        gain = AC.multi_actor(PoleBalancer, policy, value, n_actors=n_actors, n_episodes=1, t_max=2000, lr=0.01, gamma=1)
+    elif args.mode == 'curriculum':
+        if args.trainer == 'maac':
+            gain = AC.multi_actor(PoleBalancer, policy, value, writer=writer, autosave_name='26-carpole-pen100-h20-h20-curriculum', n_actors=n_actors,
+                                  n_episodes=100000, t_max=5000, t_backup=t_backup, lr=0.01, gamma=1,
+                                  difficulty=0.001, max_difficulty=None, gain_target=-0.05)
+        elif args.trainer == 'baac':
+            baac = AC.BatchAdvantageActorCritic([PoleBalancer() for _ in range(n_actors)], policy=policy, value=value, writer=writer,
+                                                lr=0.01, gamma=1, t_max=5000, t_backup=t_backup, temperature=1,
+                                                difficulty=0.001, mean_gain_target=-0.05)
+            baac.run_episodes(100000)
+        else:
+            raise ValueError('unknown trainer', args.trainer)
+    else:
+        raise ValueError('unknown mode', args.mode)

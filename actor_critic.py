@@ -4,7 +4,7 @@ import torch.nn.utils as utils
 import numpy as np
 import random
 
-def multi_actor(env_constructor, policy, value, n_actors, n_episodes, writer=None, lr=0.01, t_max=None, gain_target=None, difficulty=None, max_difficulty=None, difficulty_gain_period=10**9, difficulty_gain_step=0.05, **kargs):
+def multi_actor(env_constructor, policy, value, n_actors, n_episodes, writer=None, autosave_name=None, lr=0.01, t_max=None, gain_target=None, difficulty=None, max_difficulty=None, difficulty_gain_period=10**9, difficulty_gain_step=0.05, **kargs):
     policy_opt = torch.optim.Adam(policy.parameters(), lr=lr)
     value_opt = torch.optim.Adam(value.parameters(), lr=lr)
 
@@ -44,7 +44,8 @@ def multi_actor(env_constructor, policy, value, n_actors, n_episodes, writer=Non
                     df = difficulty
                 if writer is not None:
                     actors[i].log_episode_stats(writer, n_finished)
-                    writer.add_scalar('difficulty', df, n_finished)
+                    if df is not None:
+                        writer.add_scalar('difficulty', df, n_finished)
                 actors[i].clear_episode_stats()
                 gain = se.value
                 gains.append(gain)
@@ -52,6 +53,9 @@ def multi_actor(env_constructor, policy, value, n_actors, n_episodes, writer=Non
                     difficulty += difficulty_gain_step
                     last_levelup = n_finished
                     print('target gain', gain, 'achieved, raising difficulty to', difficulty)
+                    if autosave_name is not None:
+                        torch.save(policy.state_dict(), autosave_name + '_policy.cpy')
+                        torch.save(value.state_dict(), autosave_name + '_value.cpy')
 
                 print(se.value)
                 gens[i] = actors[i].gen_episode(autoclear=False, difficulty=df, t_max=gen_t_max())
@@ -223,11 +227,205 @@ class AdvantageActorCritic:
         self.energy_spent = 0
 
 
+class BatchAdvantageActorCritic:
+    def __init__(self, envs, policy, value, writer=None, lr=1e-3, gamma=0.95, t_backup=5, t_max=None, temperature=1,
+                 difficulty=None, difficulty_step=0.02, mean_gain_target=None):
+        self.n = len(envs)
+        self.env_b = envs
+        self.policy = policy
+        self.value = value
+        self.gamma = gamma  # discount factor
+        self.t_backup = t_backup  # maximum number of steps before backups
+        self.t_max = t_max  # maximum episode length
+        self.temperature = temperature
+
+        self.difficulty = difficulty
+        self.difficulty_step = difficulty_step
+        self.mean_gain_target = mean_gain_target
+
+        self.writer = writer
+
+        self.policy_opt = torch.optim.Adam(policy.parameters(), lr=lr)
+        self.value_opt = torch.optim.Adam(value.parameters(), lr=lr)
+
+        self.running_reward = None
+        self.iter = 0
+
+        # whole-time stats
+        self.mean_gain_history = []
+        # stats
+        self.state_stats = []
+        self.entropy_stats = []
+        self.total_policy_loss_stats = 0
+        self.total_value_loss_stats = 0
+        self.n_backups = 0
+        self.episode_len_stats = torch.IntTensor(self.n)
+        self.gain_stats = torch.FloatTensor(self.n)
+        self.energy_spent = torch.FloatTensor(self.n)
+        self.clear_episode_stats()
+
+    def run_episodes(self, n_episodes, t_max=None):
+        if t_max is None:
+            t_max = self.t_max
+
+        if t_max is not None:
+            d = torch.distributions.Uniform(t_max * 0.9, t_max * 1.1)
+            t_max = d.sample((self.n,))
+
+        for env in self.env_b:
+            env.reset(difficulty=self.difficulty)
+
+        self.clear_episode_stats()
+
+        t = 1
+        finished_episodes = 0
+        t_episode_start_b = [t] * self.n
+        e_gains = torch.zeros(self.n)
+        last_log = finished_episodes
+        last_difficulty_increment = t
+
+        while finished_episodes < n_episodes:
+            self.policy_opt.zero_grad()
+            self.value_opt.zero_grad()
+
+            t_start = t
+
+            st_b = [env.get_state() for env in self.env_b]
+
+            entropy_bs = []
+            log_prob_bs = []
+            state_bs = []
+            reward_bs = []
+
+            while not t - t_start == self.t_backup:
+                state_bs.append(st_b)
+                action_b, log_prob_b, entropy_b = self.policy.select_action(st_b, t=max(self.temperature / (self.iter+1), 1))
+
+                res_b = []
+                st_b = []
+                finished_idx = []
+                elapsed_idx = []
+                reward_b = []
+                for i in range(self.n):
+                    res, st, reward = self.env_b[i].act(action_b[i].item())
+                    res_b.append(res)
+                    st_b.append(st)
+                    reward_b.append(reward)
+                    if res == 'FINISH':
+                        finished_idx.append(i)
+                    if t_max is not None and t - t_episode_start_b[i] >= t_max[i]:
+                        elapsed_idx.append(i)
+
+                log_prob_bs.append(log_prob_b)
+                reward_bs.append(reward_b)
+                entropy_bs.append(entropy_b)
+
+                self.entropy_stats.append(entropy_b.detach())
+                self.state_stats.append(st_b)
+                self.gain_stats += torch.tensor(reward_b)
+                #self.energy_spent_b += abs(action_b - self.env_b[0].N_ACTIONS // 2)
+
+                t += 1
+                self.iter += 1
+
+                if len(finished_idx) > 0 or len(elapsed_idx) > 0:
+                    break
+
+            elapsed_set = set(elapsed_idx)
+
+            with torch.no_grad():
+                ret_b = self.value.compute_value(st_b)
+
+            for i in set(finished_idx + elapsed_idx):
+                if i not in elapsed_set:
+                    ret_b[i] = 0
+                self.env_b[i].reset(difficulty=self.difficulty)
+                self.episode_len_stats[i] = t - t_episode_start_b[i]
+                t_episode_start_b[i] = t
+                t_max[i] = d.sample()
+                self.mean_gain_history.append((self.gain_stats[i] / self.episode_len_stats[i].float()).item())
+                finished_episodes += 1
+
+            state_bs.reverse()
+            log_prob_bs.reverse()
+            reward_bs.reverse()
+            vs = self.value.compute_value(state_bs)
+
+            policy_loss = []
+            value_loss = []
+
+            for lp, r, v in zip(log_prob_bs, reward_bs, vs):  # iterating in reverse order
+                ret_b = torch.tensor(r) + ret_b * self.gamma
+                policy_loss.append(-lp * (ret_b - v.detach()))
+                value_loss.append((ret_b.detach() - v)**2)
+
+            policy_loss = torch.stack(policy_loss).mean() - 10 * torch.tensor(entropy_bs).mean()
+            value_loss = torch.stack(value_loss).mean()
+
+            policy_loss.backward()
+            value_loss.backward()
+
+            self.total_policy_loss_stats += policy_loss.item()
+            self.total_value_loss_stats += value_loss.item()
+            self.n_backups += 1
+
+            utils.clip_grad_norm(self.policy.parameters(), 5)
+            utils.clip_grad_norm(self.value.parameters(), 5)
+
+            self.policy_opt.step()
+            self.value_opt.step()
+
+            if finished_episodes - last_difficulty_increment > self.n:
+                mean_gain = torch.tensor(self.mean_gain_history[-self.n:]).mean()
+                if mean_gain > self.mean_gain_target:
+                    self.difficulty += self.difficulty_step
+                    last_difficulty_increment = finished_episodes
+                    print(f'target gain {mean_gain} achieved, raising difficulty to', self.difficulty)
+                    torch.save(self.policy.state_dict(), 'policy_backup.cpy')
+                    torch.save(self.value.state_dict(), 'value_backup.cpy')
+
+            if self.writer is not None and finished_episodes - last_log >= 1:
+                self.log_episode_stats(iter=finished_episodes)
+                self.clear_episode_stats()
+                last_log = finished_episodes
+
+        return self.gain_stats / t
+
+    def log_episode_stats(self, writer=None, iter=None):
+        if writer is None:
+            writer = self.writer
+        assert writer is not None
+
+        if iter is None:
+            iter = self.iter
+
+        writer.add_scalar('policy_loss', self.total_policy_loss_stats / self.n_backups, iter)
+        writer.add_scalar('value_loss', self.total_value_loss_stats / self.n_backups, iter)
+        writer.add_scalar('entropy', torch.tensor(self.entropy_stats).mean(), iter)
+        writer.add_scalar('episode_len', self.episode_len_stats.float().mean(), iter)
+        writer.add_scalar('gain', torch.tensor(self.gain_stats).mean(), iter)
+        writer.add_scalar('mean_power', (self.energy_spent / self.episode_len_stats.float()).mean(), iter)
+        writer.add_scalar('difficulty', self.difficulty, iter)
+        print(self.mean_gain_history[-1])
+
+    def clear_episode_stats(self):
+        self.state_stats.clear()
+        self.entropy_stats.clear()
+        self.total_policy_loss_stats = 0
+        self.total_value_loss_stats = 0
+        self.n_backups = 0
+        self.episode_len_stats.zero_()
+        self.gain_stats.zero_()
+        self.energy_spent.zero_()
+
+
 if __name__ == '__main__':
-    from reinforce import SpatialValues
-    from approximators import SpatialPolicy
+    from argparse import ArgumentParser
+    import random
+    from approximators import SpatialPolicy, SpatialValue
     from tensorboardX import SummaryWriter
 
+    random.seed(0)
     torch.random.manual_seed(0)
 
     def mk_race():
@@ -236,16 +434,28 @@ if __name__ == '__main__':
 
     ac_race = mk_race()
 
-
     policy = SpatialPolicy(ac_race, n_hidden=20)
-    value = SpatialValues(ac_race, hidden=20)
+    value = SpatialValue(ac_race, n_hidden=20)
 
-    if True:
-        writer = SummaryWriter('logs/aac_track5s5_nactors10_lr0.01_g1_tbackup8_tmax500_t1_ent10_try2')
-        multi_actor(mk_race, policy, value, 10, 5000, writer=writer, lr=0.01, gamma=1, t_max=500, t_backup=8, temperature=1)
-    else:
-        writer = SummaryWriter('logs/actor_critic_lr0.01_tbackup100_tmax500_t500_ent10')
-        trainer = AdvantageActorCritic(mk_race(), policy, value=value, writer=writer, lr=1e-2, gamma=0.99, t_max=500, t_backup=10, temperature=1)
-        for k in range(2000):
+    parser = ArgumentParser()
+    parser.add_argument('--num-episodes', default=2000, type=int)
+    parser.add_argument('--name', default='unnamed')
+    parser.add_argument('mode', choices="baac maac aac".split())
+    args = parser.parse_args()
+    mode = args.mode
+    n_actors = 1
+    if mode == 'baac':
+        writer = SummaryWriter(f'logs/baac_track5s5_{args.name}_nactors{n_actors}_lr0.01_g1_tbackup8_tmax500_t1_ent10_test3_gclip')
+        baac = BatchAdvantageActorCritic([mk_race() for _ in range(n_actors)], policy=policy, value=value, writer=writer, lr=0.01, gamma=1, t_max=500, t_backup=8, temperature=1)
+        baac.run_episodes(args.num_episodes)
+    elif mode == 'maac':
+        writer = SummaryWriter(f'logs/maac_track5s5_{args.name}_nactors{n_actors}_lr0.01_g1_tbackup8_tmax500_t1_ent10_test')
+        multi_actor(mk_race, policy, value, n_actors, args.num_episodes, writer=writer, lr=0.01, gamma=1, t_max=500, t_backup=8, temperature=1)
+    elif mode == 'aac':
+        writer = SummaryWriter('logs/actor_critic_lr0.01_tbackup8_tmax500_t1_ent10')
+        trainer = AdvantageActorCritic(mk_race(), policy, value=value, writer=writer, lr=1e-2, gamma=0.99, t_max=500, t_backup=8, temperature=1)
+        for k in range(args.num_episodes):
             n_steps = trainer.run_episode()
             print(n_steps)
+    else:
+        raise ValueError('unknown mode', mode)
