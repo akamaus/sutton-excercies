@@ -18,6 +18,7 @@ class PoleBalancer:
         self.x_velocity = None
         self.angle_velocity = None
         self.engine_force = None
+        self.calmness = 0
 
         self.reset()
 
@@ -82,8 +83,19 @@ class PoleBalancer:
             penalty = 0
 
         a = self.angle % (2*pi)
-        reward = - min(abs(a), abs(2*pi - a)) - penalty
-        return 'CONT', self.get_state(), reward
+        reward = - min(abs(a), abs(2*pi - a))
+
+        if reward > -0.1:
+            self.calmness += 1
+        else:
+            self.calmness = 0
+
+        if self.calmness > 300:
+            res = 'FINISH'
+        else:
+            res = 'CONT'
+
+        return res, self.get_state(), reward - penalty
 
 
 import sys
@@ -136,14 +148,15 @@ class App(QMainWindow):
         rew = 0
         if self.external_force is None and self.policy:
             act, prob, ent = self.policy.select_action(self.car.get_state())
-            _, _, rew = self.car.act(act)
+            res, _, rew = self.car.act(act)
         else:
             self.car.engine_force = self.external_force or 0
             self.car.move(0.001)
+            res = ''
 
         self.m.update()
         self.k += 1
-        print(f'{self.k}: reward {rew:6.2f} force {self.car.engine_force:6.2f} x_vel {self.car.x_velocity:6.2f} angle_vel {self.car.angle_velocity:6.2f} angle {self.car.angle:5.1f}')
+        print(f'{self.k}: {res} reward {rew:6.2f} force {self.car.engine_force:6.2f} x_vel {self.car.x_velocity:6.2f} angle_vel {self.car.angle_velocity:6.2f} angle {self.car.angle:5.1f}')
 
     def eventFilter(self, source, event):
         if event.type() == QtCore.QEvent.MouseMove:
@@ -225,7 +238,7 @@ if __name__ == '__main__':
         from tensorboardX import SummaryWriter
         import actor_critic as AC
 
-        writer = SummaryWriter(f'logs/{args.id}-{args.trainer}-carpole-actors{n_actors}-penalty100-mforce200-scaled-h{p_hidden}-scaled-h{v_hidden}-tbackup50-tmax5000rnd-df0.001-g1-{args.mode}')
+        writer = SummaryWriter(f'logs/{args.id}-{args.trainer}-carpole-actors{n_actors}-penalty100-mforce200-scaled-h{p_hidden}-scaled-h{v_hidden}-tbackup50-tmax5000rnd-df0.001-g1-episodic-{args.mode}')
 
     if args.mode == 'train':
         gain = AC.multi_actor(PoleBalancer, policy, value, n_actors=n_actors, n_episodes=1, t_max=2000, lr=0.01, gamma=1)
@@ -235,9 +248,9 @@ if __name__ == '__main__':
                                   n_episodes=100000, t_max=5000, t_backup=t_backup, lr=0.01, gamma=1,
                                   difficulty=0.001, max_difficulty=None, gain_target=-0.05)
         elif args.trainer == 'baac':
-            baac = AC.BatchAdvantageActorCritic([PoleBalancer() for _ in range(n_actors)], policy=policy, value=value, writer=writer,
+            baac = AC.BatchAdvantageActorCritic([PoleBalancer() for _ in range(n_actors)], policy=policy, value=value, writer=writer, name=args.id,
                                                 lr=0.01, gamma=1, t_max=5000, t_backup=t_backup, temperature=1,
-                                                difficulty=0.001, mean_gain_target=-0.05)
+                                                difficulty=0.001, episode_len_target=2000)
             baac.run_episodes(100000)
         else:
             raise ValueError('unknown trainer', args.trainer)

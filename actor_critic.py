@@ -228,8 +228,9 @@ class AdvantageActorCritic:
 
 
 class BatchAdvantageActorCritic:
-    def __init__(self, envs, policy, value, writer=None, lr=1e-3, gamma=0.95, t_backup=5, t_max=None, temperature=1,
-                 difficulty=None, difficulty_step=0.02, mean_gain_target=None):
+    def __init__(self, envs, policy, value, writer=None, name=None, lr=1e-3, gamma=0.95, t_backup=5, t_max=None, temperature=1,
+                 difficulty=None, difficulty_step=0.02, mean_gain_target=None, gain_target=None, episode_len_target=None):
+        self.name = name
         self.n = len(envs)
         self.env_b = envs
         self.policy = policy
@@ -242,6 +243,8 @@ class BatchAdvantageActorCritic:
         self.difficulty = difficulty
         self.difficulty_step = difficulty_step
         self.mean_gain_target = mean_gain_target
+        self.gain_target = gain_target
+        self.episode_len_target = episode_len_target
 
         self.writer = writer
 
@@ -251,15 +254,16 @@ class BatchAdvantageActorCritic:
         self.running_reward = None
         self.iter = 0
 
-        # whole-time stats
+        # episode stats, for logging
+        self.gain_history = []
         self.mean_gain_history = []
-        # stats
+        self.episode_len_history = []
+        # running episode stats
         self.state_stats = []
         self.entropy_stats = []
         self.total_policy_loss_stats = 0
         self.total_value_loss_stats = 0
         self.n_backups = 0
-        self.episode_len_stats = torch.IntTensor(self.n)
         self.gain_stats = torch.FloatTensor(self.n)
         self.energy_spent = torch.FloatTensor(self.n)
         self.clear_episode_stats()
@@ -339,11 +343,15 @@ class BatchAdvantageActorCritic:
             for i in set(finished_idx + elapsed_idx):
                 if i not in elapsed_set:
                     ret_b[i] = 0
-                self.env_b[i].reset(difficulty=self.difficulty)
-                self.episode_len_stats[i] = t - t_episode_start_b[i]
-                t_episode_start_b[i] = t
                 t_max[i] = d.sample()
-                self.mean_gain_history.append((self.gain_stats[i] / self.episode_len_stats[i].float()).item())
+                ep_len = t - t_episode_start_b[i]
+                self.mean_gain_history.append((self.gain_stats[i] / ep_len).item())
+                self.gain_history.append(self.gain_stats[i].item())
+                self.episode_len_history.append(ep_len)
+
+                self.env_b[i].reset(difficulty=self.difficulty)
+                t_episode_start_b[i] = t
+
                 finished_episodes += 1
 
             state_bs.reverse()
@@ -376,22 +384,26 @@ class BatchAdvantageActorCritic:
             self.value_opt.step()
 
             if finished_episodes - last_difficulty_increment > self.n:
-                mean_gain = torch.tensor(self.mean_gain_history[-self.n:]).mean()
-                if mean_gain > self.mean_gain_target:
+                recent_mean_gain = torch.tensor(self.mean_gain_history[-self.n:]).mean()
+                recent_gain = torch.tensor(self.gain_history[-self.n:]).mean()
+                recent_episode_len = torch.tensor(self.episode_len_history[-self.n:]).float().mean()
+                if (self.mean_gain_target is not None and recent_mean_gain > self.mean_gain_target) or \
+                        (self.gain_target is not None and recent_gain > self.gain_target) or \
+                        (self.episode_len_target is not None and recent_episode_len < self.episode_len_target):
                     self.difficulty += self.difficulty_step
                     last_difficulty_increment = finished_episodes
-                    print(f'target gain {mean_gain} achieved, raising difficulty to', self.difficulty)
-                    torch.save(self.policy.state_dict(), 'policy_backup.cpy')
-                    torch.save(self.value.state_dict(), 'value_backup.cpy')
+                    print(f'target gain level achieved, raising difficulty to', self.difficulty)
+                    torch.save(self.policy.state_dict(), f'{self.name}_policy_backup.cpy')
+                    torch.save(self.value.state_dict(), f'{self.name}_value_backup.cpy')
 
             if self.writer is not None and finished_episodes - last_log >= 1:
-                self.log_episode_stats(iter=finished_episodes)
+                self.log_episode_stats(log_from=last_log, iter=finished_episodes)
                 self.clear_episode_stats()
                 last_log = finished_episodes
 
-        return self.gain_stats / t
+        return torch.tensor(self.gain_stats).mean()
 
-    def log_episode_stats(self, writer=None, iter=None):
+    def log_episode_stats(self, log_from, writer=None, iter=None):
         if writer is None:
             writer = self.writer
         assert writer is not None
@@ -402,9 +414,10 @@ class BatchAdvantageActorCritic:
         writer.add_scalar('policy_loss', self.total_policy_loss_stats / self.n_backups, iter)
         writer.add_scalar('value_loss', self.total_value_loss_stats / self.n_backups, iter)
         writer.add_scalar('entropy', torch.tensor(self.entropy_stats).mean(), iter)
-        writer.add_scalar('episode_len', self.episode_len_stats.float().mean(), iter)
-        writer.add_scalar('gain', torch.tensor(self.gain_stats).mean(), iter)
-        writer.add_scalar('mean_power', (self.energy_spent / self.episode_len_stats.float()).mean(), iter)
+        writer.add_scalar('episode_len', torch.tensor(self.episode_len_history[log_from:]).float().mean(), iter)
+        writer.add_scalar('mean_gain', torch.tensor(self.mean_gain_history[log_from:]).mean(), iter)
+        writer.add_scalar('gain', torch.tensor(self.gain_history[log_from:]).mean(), iter)
+        #writer.add_scalar('mean_power', (self.energy_spent / self.episode_len_stats.float()).mean(), iter)
         writer.add_scalar('difficulty', self.difficulty, iter)
         print(self.mean_gain_history[-1])
 
@@ -414,7 +427,6 @@ class BatchAdvantageActorCritic:
         self.total_policy_loss_stats = 0
         self.total_value_loss_stats = 0
         self.n_backups = 0
-        self.episode_len_stats.zero_()
         self.gain_stats.zero_()
         self.energy_spent.zero_()
 
