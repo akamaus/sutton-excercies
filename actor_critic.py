@@ -363,11 +363,11 @@ class BatchAdvantageActorCritic:
             value_loss = []
 
             for lp, r, v in zip(log_prob_bs, reward_bs, vs):  # iterating in reverse order
-                ret_b = torch.tensor(r) + ret_b * self.gamma
+                ret_b = torch.tensor(r).to(ret_b) + ret_b * self.gamma
                 policy_loss.append(-lp * (ret_b - v.detach()))
                 value_loss.append((ret_b.detach() - v)**2)
 
-            policy_loss = torch.stack(policy_loss).mean() - 10 * torch.tensor(entropy_bs).mean()
+            policy_loss = torch.stack(policy_loss).mean() - 10 * torch.tensor(entropy_bs).to(ret_b).mean()
             value_loss = torch.stack(value_loss).mean()
 
             policy_loss.backward()

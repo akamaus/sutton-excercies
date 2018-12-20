@@ -60,6 +60,11 @@ class BasePolicy(nn.Module):
             layers.append(nn.Linear(n_hidden, n_hidden))
         layers.append(nn.Linear(n_hidden, n_actions))
         self.layers = nn.ModuleList(layers)
+        self.device = None
+
+    def set_device(self, device):
+        self.device = device
+        self.to(device)
 
     def forward(self, x):
         for i in range(len(self.layers)-1):
@@ -73,7 +78,7 @@ class BasePolicy(nn.Module):
             state = [state]
         else:
             wrapped = False
-        x = self.encode_input(state)
+        x = self.encode_input(state).to(self.device)
         logits = self.forward(x)
         probs = F.softmax(logits / t, dim=1)
         m = Categorical(probs)
@@ -84,6 +89,7 @@ class BasePolicy(nn.Module):
         else:
             action = action.detach()
             lp = m.log_prob(action)
+            action = action.cpu()
         return action, lp, torch.sum(-probs * probs.log())
 
     def encode_input(self, states):
@@ -128,6 +134,12 @@ class BaseValue(nn.Module):
         self.affine1 = nn.Linear(n_inputs, n_hidden)
         self.affine2 = nn.Linear(n_hidden, 1)
 
+        self.device = None
+
+    def set_device(self, device):
+        self.device = device
+        self.to(device)
+
     def forward(self, x):
         x = F.relu(self.affine1(x))
         y = self.affine2(x)
@@ -140,7 +152,7 @@ class BaseValue(nn.Module):
         else:
             sole = False
 
-        x = self.encode_value(states)
+        x = self.encode_value(states).to(self.device)
         y = self.forward(x).squeeze(-1)
 
         if sole:

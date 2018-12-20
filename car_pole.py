@@ -203,11 +203,12 @@ if __name__ == '__main__':
     import torch
 
     parser = ArgumentParser()
-    parser.add_argument('--id', type=int)
+    parser.add_argument('--id')
     parser.add_argument('--num-layers', type=int, default=2)
     parser.add_argument('--hidden', type=int, default=20)
     parser.add_argument('--trainer', choices='baac maac'.split())
     parser.add_argument('--load-policy', help='initialize policy from file')
+    parser.add_argument('--gpu', action='store_true', default=False)
     parser.add_argument('mode', choices=['demo', 'train', 'curriculum'])
     args = parser.parse_args()
 
@@ -225,6 +226,11 @@ if __name__ == '__main__':
 
     policy = A.ScaledPolicy(task, diaps, n_hidden=p_hidden)
     value = A.ScaledValue(task, diaps, n_hidden=v_hidden)
+
+    if args.gpu:
+        d = torch.device('cuda')
+        policy.set_device(d)
+        value.set_device(d)
 
     if args.mode == 'demo':
         if args.load_policy is not None:
