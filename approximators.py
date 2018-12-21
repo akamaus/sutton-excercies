@@ -30,13 +30,32 @@ class SpatialEncoder:
         self.offsets = torch.tensor(offsets)
 
     def encode(self, states):
-        assert isinstance(states, list)
+        assert not isinstance(states, tuple)
         states_t = torch.tensor(states) + self.offsets
         x = torch.zeros(*states_t.shape[:-1], self.enc_size)
 
         x.scatter_(-1, states_t, 1)
         return x
 
+
+class QuantizingEncoder(SpatialEncoder):
+    """ Encoder which quantizes input features and makes spatial encoding out of them """
+    def __init__(self, diaps, levels):
+        super().__init__(levels)
+        self.inp_diap = torch.FloatTensor(diaps)
+        self.levels = torch.tensor(levels).float() - 1
+        self.theta1 = self.levels / (self.inp_diap[:, 1] - self.inp_diap[:, 0])
+        self.theta2 = - self.theta1 * self.inp_diap[:, 0]
+
+    def encode(self, states):
+        assert isinstance(states, list)
+        x = torch.FloatTensor(states)
+        x = self.theta1 * x + self.theta2
+        x = torch.max(x, torch.tensor(0.0))
+        x = torch.min(self.levels, x)
+        x = x.round().long()
+
+        return super().encode(x)
 
 class NormalizingEncoder:
     def __init__(self, sizes):
@@ -119,12 +138,22 @@ class SpatialPolicy(BasePolicy):
 
 
 class ScaledPolicy(BasePolicy):
-    """ Policy with separate input neuron for each spatial state and axe velocity """
+    """ Policy with neuron input scaled by normalizing diapasons to [-1,1] """
     def __init__(self, env, diaps, **kargs):
         st0 = env.get_state()
         assert len(st0) == len(diaps)
         n_actions = env.N_ACTIONS
         self.input_encoder = ScalingEncoder(diaps)
+        super().__init__(self.input_encoder.enc_size, n_actions, **kargs)
+
+
+class QuantizedPolicy(BasePolicy):
+    """ Policy with separate input neuron for each quantized level of state feature """
+    def __init__(self, env, diaps, levels, **kargs):
+        st0 = env.get_state()
+        assert len(st0) == len(diaps)
+        n_actions = env.N_ACTIONS
+        self.input_encoder = QuantizingEncoder(diaps, levels)
         super().__init__(self.input_encoder.enc_size, n_actions, **kargs)
 
 
@@ -181,9 +210,18 @@ class SpatialValue(BaseValue):
 
 
 class ScaledValue(BaseValue):
-    """ Policy with separate input neuron for each spatial state and axe velocity """
+    """ Value function with normalized feature input"""
     def __init__(self, env, diaps, n_hidden=128):
         st0 = env.get_state()
         assert len(st0) == len(diaps)
         self.input_encoder = ScalingEncoder(diaps)
         super().__init__(self.input_encoder.enc_size, n_hidden=n_hidden)
+
+
+class QuantizedValue(BaseValue):
+    """ Value function with separate input neuron for each spatial state and axe velocity """
+    def __init__(self, env, diaps, levels, **kargs):
+        st0 = env.get_state()
+        assert len(st0) == len(diaps)
+        self.input_encoder = QuantizingEncoder(diaps, levels)
+        super().__init__(self.input_encoder.enc_size, **kargs)
