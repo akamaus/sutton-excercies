@@ -3,6 +3,7 @@
 from math import sin, cos, pi
 import random
 import os
+import sys
 
 class PoleBalancer:
     N_ACTIONS = 11
@@ -224,6 +225,8 @@ if __name__ == '__main__':
     parser.add_argument('--gpu', action='store_true', default=False)
     parser.add_argument('mode', choices=['demo', 'train', 'curriculum'])
     args = parser.parse_args()
+
+    print('ARGV', sys.argv)
 
     task = PoleBalancer()
 

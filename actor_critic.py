@@ -404,7 +404,7 @@ class BatchAdvantageActorCritic:
                     self.save('gain_backup')
 
             if self.writer is not None and self.finished_episodes - last_log >= 10:
-                self.log_episode_stats(log_from=last_log, iter=self.finished_episodes)
+                self.log_episode_stats(log_from=last_log, iter=self.iter)
                 self.clear_episode_stats()
                 last_log = self.finished_episodes
 
