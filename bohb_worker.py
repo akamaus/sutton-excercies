@@ -35,10 +35,13 @@ class SuttonWorker(Worker):
 
         loss = None
         bo_result = None
+        bo_raw = []
         for line in stdout.split('\n'):
             if line.startswith('BO_RESULT'):
                 bo_result = line
                 loss = -float(line.split()[1])
+            if line.startswith('BO_RAW'):
+                bo_raw.append(line)
 
         os.makedirs('txt_logs', exist_ok=True)
         with open(os.path.join('txt_logs', name + '.stdout'), 'a') as f:
@@ -47,9 +50,12 @@ class SuttonWorker(Worker):
         with open(os.path.join('txt_logs', name + '.stderr'), 'a') as f:
             f.write(stderr)
 
-        return({ 'loss': loss,
-                 'info': {'bo_result': bo_result}
-               })
+        res = { 'loss': loss,
+                 'info': {'bo_result': bo_result, 'bo_raw': bo_raw}
+               }
+
+        print(res)
+        return res
 
     @staticmethod
     def get_configspace():

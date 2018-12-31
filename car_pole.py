@@ -286,8 +286,8 @@ if __name__ == '__main__':
                                                     lr_policy=args.lr_policy, lr_value=args.lr_value, gamma=args.discount, t_max=5000, t_backup=t_backup, temperature=args.temperature,
                                                     difficulty=args.difficulty, episode_len_target=2000, restore=args.restore)
                 baac.run_episodes(n_iters=args.iters, n_episodes=args.episodes)
-                print('iter', baac.iter)
-                print('finished_episodes', baac.finished_episodes)
+                print('BO_RAW', 'iter', baac.iter)
+                print('BO_RAW', 'finished_episodes', baac.finished_episodes)
                 print('BO_RESULT', baac.difficulty)
             else:
                 raise ValueError('unknown trainer', args.trainer)
