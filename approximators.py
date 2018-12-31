@@ -4,6 +4,7 @@ from torch import nn as nn
 from torch.distributions import Categorical
 from torch.nn import functional as F
 
+EPS = 1e-9
 
 class ScalingEncoder:
     def __init__(self, diaps):
@@ -68,16 +69,15 @@ class NormalizingEncoder:
         return x
 
 
-class BasePolicy(nn.Module):
-    """ Base policy without any input preprocessing """
-    def __init__(self, n_inputs, n_actions, n_hidden, num_layers=2):
+class Approximator(nn.Module):
+    def __init__(self, n_inputs, n_outputs, n_hidden, num_layers=2):
         super().__init__()
         assert num_layers >= 2
         layers = []
         layers.append(nn.Linear(n_inputs, n_hidden))
         for hi in range(2, num_layers):
             layers.append(nn.Linear(n_hidden, n_hidden))
-        layers.append(nn.Linear(n_hidden, n_actions))
+        layers.append(nn.Linear(n_hidden, n_outputs))
         self.layers = nn.ModuleList(layers)
         self.device = None
 
@@ -86,10 +86,21 @@ class BasePolicy(nn.Module):
         self.to(device)
 
     def forward(self, x):
-        for i in range(len(self.layers)-1):
+        for i in range(len(self.layers) - 1):
             x = F.relu(self.layers[i](x))
         y = self.layers[-1](x)
         return y
+
+    def encode_input(self, states):
+        assert isinstance(states, list)
+        if hasattr(self, 'input_encoder'):
+            return self.input_encoder.encode(states)
+        else:
+            return torch.FloatTensor(states)
+
+
+class BasePolicy(Approximator):
+    """ Base policy without any input preprocessing """
 
     def select_action(self, state, t=1):
         if isinstance(state, tuple):
@@ -100,7 +111,7 @@ class BasePolicy(nn.Module):
         x = self.encode_input(state).to(self.device)
         logits = self.forward(x)
         probs = F.softmax(logits / t, dim=1)
-        m = Categorical(probs)
+        m = Categorical(logits=logits / t)
         action = m.sample()
         if wrapped:
             lp = m.log_prob(action)[0]
@@ -109,14 +120,7 @@ class BasePolicy(nn.Module):
             action = action.detach()
             lp = m.log_prob(action)
             action = action.cpu()
-        return action, lp, torch.sum(-probs * probs.log())
-
-    def encode_input(self, states):
-        assert isinstance(states, list)
-        if hasattr(self, 'input_encoder'):
-            return self.input_encoder.encode(states)
-        else:
-            return torch.FloatTensor(states)
+        return action, lp, torch.sum(-probs * (probs.log() + EPS)) / len(x)
 
 
 class NormPolicy(BasePolicy):
@@ -157,22 +161,9 @@ class QuantizedPolicy(BasePolicy):
         super().__init__(self.input_encoder.enc_size, n_actions, **kargs)
 
 
-class BaseValue(nn.Module):
-    def __init__(self, n_inputs, n_hidden):
-        super().__init__()
-        self.affine1 = nn.Linear(n_inputs, n_hidden)
-        self.affine2 = nn.Linear(n_hidden, 1)
-
-        self.device = None
-
-    def set_device(self, device):
-        self.device = device
-        self.to(device)
-
-    def forward(self, x):
-        x = F.relu(self.affine1(x))
-        y = self.affine2(x)
-        return y
+class BaseValue(Approximator):
+    def __init__(self, n_inputs, n_hidden, **kargs):
+        super().__init__(n_inputs, 1, n_hidden, **kargs)
 
     def compute_value(self, states):
         if isinstance(states, tuple):

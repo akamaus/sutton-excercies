@@ -2,7 +2,7 @@
 
 from math import sin, cos, pi
 import random
-
+import os
 
 class PoleBalancer:
     N_ACTIONS = 11
@@ -205,6 +205,7 @@ if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--id')
     parser.add_argument('--approximator', choices="scaled quantized".split(), default='scaled')
+    parser.add_argument('--discount', type=float, default=0.99)
     parser.add_argument('--difficulty', type=float, default=0.001)
     parser.add_argument('--num-actors', type=int, default=10)
     parser.add_argument('--num-layers', type=int, default=2)
@@ -231,7 +232,7 @@ if __name__ == '__main__':
         value = A.ScaledValue(task, diaps, n_hidden=v_hidden)
     elif args.approximator == 'quantized':
         policy = A.QuantizedPolicy(task, diaps, [25] * 4, n_hidden=p_hidden, num_layers=args.num_layers)
-        value = A.QuantizedValue(task, diaps, [25] * 4, n_hidden=v_hidden)
+        value = A.QuantizedValue(task, diaps, [25] * 4, n_hidden=v_hidden, num_layers=args.num_layers)
     else:
         raise ValueError('Unknown approximator', args.approximator)
 
@@ -252,24 +253,25 @@ if __name__ == '__main__':
         from tensorboardX import SummaryWriter
         import actor_critic as AC
 
-        writer = SummaryWriter(f'logs/{args.id}-{args.trainer}-carpole-actors{args.num_actors}-penalty100-mforce200-{args.approximator}-{args.num_layers}-h{p_hidden}-scaled-h{v_hidden}-tbackup50-tmax5000rnd-df{args.difficulty}-g1-episodic-{args.mode}')
+        full_name = f'{args.id}-{args.trainer}-carpole-actors{args.num_actors}-penalty100-mforce200-P{args.approximator}-{args.num_layers}-h{p_hidden}-V{args.approximator}-{args.num_layers}-h{v_hidden}-tbackup50-tmax5000rnd-df{args.difficulty}-g{args.discount}-episodic-{args.mode}'
+        writer = SummaryWriter(os.path.join('logs', full_name))
 
-    if args.mode == 'train':
-        baac = AC.BatchAdvantageActorCritic([PoleBalancer() for _ in range(args.num_actors)], policy=policy, value=value, writer=writer, name=args.id,
-                                            lr=0.01, gamma=1, t_max=5000, t_backup=t_backup, temperature=1,
-                                            difficulty=1, episode_len_target=2000)
-        baac.run_episodes(100000)
-    elif args.mode == 'curriculum':
-        if args.trainer == 'maac':
-            gain = AC.multi_actor(PoleBalancer, policy, value, writer=writer, autosave_name='26-carpole-pen100-h20-h20-curriculum', n_actors=args.num_actors,
-                                  n_episodes=100000, t_max=5000, t_backup=t_backup, lr=0.01, gamma=1,
-                                  difficulty=args.difficulty, max_difficulty=None, gain_target=-0.05)
-        elif args.trainer == 'baac':
+        if args.mode == 'train':
             baac = AC.BatchAdvantageActorCritic([PoleBalancer() for _ in range(args.num_actors)], policy=policy, value=value, writer=writer, name=args.id,
-                                                lr=0.01, gamma=1, t_max=5000, t_backup=t_backup, temperature=1,
+                                                lr=0.01, gamma=args.discount, t_max=5000, t_backup=t_backup, temperature=1,
                                                 difficulty=args.difficulty, episode_len_target=2000)
             baac.run_episodes(100000)
+        elif args.mode == 'curriculum':
+            if args.trainer == 'maac':
+                gain = AC.multi_actor(PoleBalancer, policy, value, writer=writer, autosave_name='26-carpole-pen100-h20-h20-curriculum', n_actors=args.num_actors,
+                                      n_episodes=100000, t_max=5000, t_backup=t_backup, lr=0.01, gamma=args.discount,
+                                      difficulty=args.difficulty, max_difficulty=None, gain_target=-0.05)
+            elif args.trainer == 'baac':
+                baac = AC.BatchAdvantageActorCritic([PoleBalancer() for _ in range(args.num_actors)], policy=policy, value=value, writer=writer, name=full_name,
+                                                    lr=0.01, gamma=args.discount, t_max=5000, t_backup=t_backup, temperature=1,
+                                                    difficulty=args.difficulty, episode_len_target=2000)
+                baac.run_episodes(100000)
+            else:
+                raise ValueError('unknown trainer', args.trainer)
         else:
-            raise ValueError('unknown trainer', args.trainer)
-    else:
-        raise ValueError('unknown mode', args.mode)
+            raise ValueError('unknown mode', args.mode)

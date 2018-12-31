@@ -393,13 +393,17 @@ class BatchAdvantageActorCritic:
                     self.difficulty += self.difficulty_step
                     last_difficulty_increment = finished_episodes
                     print(f'target gain level achieved, raising difficulty to', self.difficulty)
-                    torch.save(self.policy.state_dict(), f'{self.name}_policy_backup.cpy')
-                    torch.save(self.value.state_dict(), f'{self.name}_value_backup.cpy')
+                    torch.save(self.policy.state_dict(), f'{self.name}_policy_best.cpy')
+                    torch.save(self.value.state_dict(), f'{self.name}_value_best.cpy')
 
-            if self.writer is not None and finished_episodes - last_log >= 1:
+            if self.writer is not None and finished_episodes - last_log >= 10:
                 self.log_episode_stats(log_from=last_log, iter=finished_episodes)
                 self.clear_episode_stats()
                 last_log = finished_episodes
+
+            if finished_episodes % 100 == 0:
+                torch.save(self.policy.state_dict(), f'{self.name}_policy_backup.cpy')
+                torch.save(self.value.state_dict(), f'{self.name}_value_backup.cpy')
 
         return torch.tensor(self.gain_stats).mean()
 
@@ -419,7 +423,7 @@ class BatchAdvantageActorCritic:
         writer.add_scalar('gain', torch.tensor(self.gain_history[log_from:]).mean(), iter)
         #writer.add_scalar('mean_power', (self.energy_spent / self.episode_len_stats.float()).mean(), iter)
         writer.add_scalar('difficulty', self.difficulty, iter)
-        print(self.mean_gain_history[-1])
+        print('mean gain', self.mean_gain_history[-1])
 
     def clear_episode_stats(self):
         self.state_stats.clear()
