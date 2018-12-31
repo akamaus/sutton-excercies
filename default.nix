@@ -6,8 +6,6 @@ let
   self = pkgs.python36Packages;
   inherit (self) buildPythonPackage fetchPypi;
 
-  tensorboardX = self.callPackage ./tensorboardX.nix {};
-
   be = stdenv.mkDerivation {
     name = "buildenv";
     buildInputs =
@@ -16,6 +14,7 @@ let
     [ tqdm
       ipython
       jupyter
+      hpbandster
       matplotlib
       numpy
       pyqt5
