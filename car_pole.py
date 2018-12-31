@@ -207,7 +207,8 @@ if __name__ == '__main__':
     parser.add_argument('--tbackup', type=int, default=50)
     parser.add_argument('--discount', type=float, default=0.99)
     parser.add_argument('--difficulty', type=float, default=0.001)
-    parser.add_argument('--episodes', type=int, default=10000)
+    parser.add_argument('--episodes', type=int, default=None)
+    parser.add_argument('--iters', type=int, default=None)
     parser.add_argument('--lr-policy', type=float, default=0.01)
     parser.add_argument('--lr-value', type=float, default=0.01)
     parser.add_argument('--num-actors', type=int, default=10)
@@ -215,6 +216,7 @@ if __name__ == '__main__':
     parser.add_argument('--hidden', type=int, default=20)
     parser.add_argument('--id')
     parser.add_argument('--restore', action='store_true', default=False)
+    parser.add_argument('--short_name', action='store_true', help='just use id without any descripting suffixes for checkpoint names and logs')
     parser.add_argument('--trainer', choices='baac maac'.split())
     parser.add_argument('--load-policy', help='initialize policy from file')
     parser.add_argument('--temperature', type=float, default=1)
@@ -260,7 +262,10 @@ if __name__ == '__main__':
         from tensorboardX import SummaryWriter
         import actor_critic as AC
 
-        full_name = f'{args.id}-{args.trainer}-carpole-act{args.num_actors}-pen100-mf200-P{args.approximator}-{args.num_layers}-h{p_hidden}-V{args.approximator}-{args.num_layers}-h{v_hidden}-tbkp50-tmax5000rnd-df{args.difficulty}-g{args.discount}-{args.mode}'
+        if args.short_name:
+            full_name = args.id
+        else:
+            full_name = f'{args.id}-{args.trainer}-carpole-act{args.num_actors}-pen100-mf200-P{args.approximator}-{args.num_layers}-h{p_hidden}-V{args.approximator}-{args.num_layers}-h{v_hidden}-tbkp50-tmax5000rnd-sdf{args.difficulty:.2}-g{args.discount:.2}-{args.mode}'
         writer = SummaryWriter(os.path.join('logs', full_name))
 
         if args.mode == 'train':
@@ -277,7 +282,10 @@ if __name__ == '__main__':
                 baac = AC.BatchAdvantageActorCritic([PoleBalancer() for _ in range(args.num_actors)], policy=policy, value=value, writer=writer, name=full_name,
                                                     lr_policy=args.lr_policy, lr_value=args.lr_value, gamma=args.discount, t_max=5000, t_backup=t_backup, temperature=args.temperature,
                                                     difficulty=args.difficulty, episode_len_target=2000, restore=args.restore)
-                baac.run_episodes(args.episodes)
+                baac.run_episodes(n_iters=args.iters, n_episodes=args.episodes)
+                print('iter', baac.iter)
+                print('finished_episodes', baac.finished_episodes)
+                print('BO_RESULT', baac.difficulty)
             else:
                 raise ValueError('unknown trainer', args.trainer)
         else:

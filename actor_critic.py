@@ -275,7 +275,7 @@ class BatchAdvantageActorCritic:
         self.energy_spent = torch.FloatTensor(self.n)
         self.clear_episode_stats()
 
-    def run_episodes(self, n_episodes, t_max=None):
+    def run_episodes(self, n_iters=None, n_episodes=None, t_max=None):
         if t_max is None:
             t_max = self.t_max
 
@@ -296,7 +296,7 @@ class BatchAdvantageActorCritic:
 
         last_backup = self.finished_episodes
 
-        while self.finished_episodes < n_episodes and (self.difficulty_target is None or self.difficulty < self.difficulty_target):
+        while (n_iters is None or self.iter < n_iters) and (n_episodes is None or self.finished_episodes < n_episodes) and (self.difficulty_target is None or self.difficulty < self.difficulty_target):
             self.policy_opt.zero_grad()
             self.value_opt.zero_grad()
 
