@@ -2,6 +2,7 @@ import torch
 import torch.nn.utils as utils
 
 import numpy as np
+import os
 import random
 
 def multi_actor(env_constructor, policy, value, n_actors, n_episodes, writer=None, autosave_name=None, lr=0.01, t_max=None, gain_target=None, difficulty=None, max_difficulty=None, difficulty_gain_period=10**9, difficulty_gain_step=0.05, **kargs):
@@ -228,8 +229,8 @@ class AdvantageActorCritic:
 
 
 class BatchAdvantageActorCritic:
-    def __init__(self, envs, policy, value, writer=None, name=None, lr=1e-3, gamma=0.95, t_backup=5, t_max=None, temperature=1,
-                 difficulty=None, difficulty_step=0.02, mean_gain_target=None, gain_target=None, episode_len_target=None):
+    def __init__(self, envs, policy, value, writer=None, name=None, restore=False, lr_policy=1e-3, lr_value=1e-3, gamma=0.95, t_backup=5, t_max=None, temperature=1,
+                 difficulty=None, difficulty_step=0.02, difficulty_target=None, mean_gain_target=None, gain_target=None, episode_len_target=None):
         self.name = name
         self.n = len(envs)
         self.env_b = envs
@@ -240,19 +241,25 @@ class BatchAdvantageActorCritic:
         self.t_max = t_max  # maximum episode length
         self.temperature = temperature
 
-        self.difficulty = difficulty
-        self.difficulty_step = difficulty_step
+        self.difficulty = difficulty  # starting difficulty level
+        self.difficulty_step = difficulty_step  # difficulty increment after target performance level(gain) is reached
+        self.difficulty_target = difficulty_target  # maximal difficulty to stop after reaching
+
         self.mean_gain_target = mean_gain_target
         self.gain_target = gain_target
         self.episode_len_target = episode_len_target
 
         self.writer = writer
 
-        self.policy_opt = torch.optim.Adam(policy.parameters(), lr=lr)
-        self.value_opt = torch.optim.Adam(value.parameters(), lr=lr)
+        self.policy_opt = torch.optim.Adam(policy.parameters(), lr=lr_policy)
+        self.value_opt = torch.optim.Adam(value.parameters(), lr=lr_value)
 
         self.running_reward = None
         self.iter = 0
+        self.finished_episodes = 0
+
+        if restore:
+            self.restore()
 
         # episode stats, for logging
         self.gain_history = []
@@ -282,13 +289,14 @@ class BatchAdvantageActorCritic:
         self.clear_episode_stats()
 
         t = 1
-        finished_episodes = 0
         t_episode_start_b = [t] * self.n
         e_gains = torch.zeros(self.n)
-        last_log = finished_episodes
+        last_log = self.finished_episodes
         last_difficulty_increment = t
 
-        while finished_episodes < n_episodes:
+        last_backup = self.finished_episodes
+
+        while self.finished_episodes < n_episodes and (self.difficulty_target is None or self.difficulty < self.difficulty_target):
             self.policy_opt.zero_grad()
             self.value_opt.zero_grad()
 
@@ -352,7 +360,7 @@ class BatchAdvantageActorCritic:
                 self.env_b[i].reset(difficulty=self.difficulty)
                 t_episode_start_b[i] = t
 
-                finished_episodes += 1
+                self.finished_episodes += 1
 
             state_bs.reverse()
             log_prob_bs.reverse()
@@ -383,7 +391,7 @@ class BatchAdvantageActorCritic:
             self.policy_opt.step()
             self.value_opt.step()
 
-            if finished_episodes - last_difficulty_increment > self.n:
+            if self.finished_episodes - last_difficulty_increment > self.n:
                 recent_mean_gain = torch.tensor(self.mean_gain_history[-self.n:]).mean()
                 recent_gain = torch.tensor(self.gain_history[-self.n:]).mean()
                 recent_episode_len = torch.tensor(self.episode_len_history[-self.n:]).float().mean()
@@ -391,19 +399,20 @@ class BatchAdvantageActorCritic:
                         (self.gain_target is not None and recent_gain > self.gain_target) or \
                         (self.episode_len_target is not None and recent_episode_len < self.episode_len_target):
                     self.difficulty += self.difficulty_step
-                    last_difficulty_increment = finished_episodes
+                    last_difficulty_increment = self.finished_episodes
                     print(f'target gain level achieved, raising difficulty to', self.difficulty)
-                    torch.save(self.policy.state_dict(), f'{self.name}_policy_best.cpy')
-                    torch.save(self.value.state_dict(), f'{self.name}_value_best.cpy')
+                    self.save('gain_backup')
 
-            if self.writer is not None and finished_episodes - last_log >= 10:
-                self.log_episode_stats(log_from=last_log, iter=finished_episodes)
+            if self.writer is not None and self.finished_episodes - last_log >= 10:
+                self.log_episode_stats(log_from=last_log, iter=self.finished_episodes)
                 self.clear_episode_stats()
-                last_log = finished_episodes
+                last_log = self.finished_episodes
 
-            if finished_episodes % 100 == 0:
-                torch.save(self.policy.state_dict(), f'{self.name}_policy_backup.cpy')
-                torch.save(self.value.state_dict(), f'{self.name}_value_backup.cpy')
+            if self.finished_episodes - last_backup > 500:
+                self.last_backup = self.finished_episodes
+                self.save('backup')
+
+        self.save()
 
         return torch.tensor(self.gain_stats).mean()
 
@@ -434,6 +443,30 @@ class BatchAdvantageActorCritic:
         self.gain_stats.zero_()
         self.energy_spent.zero_()
 
+    def save(self, suffix='checkpoint'):
+        sdict = {
+            'policy': self.policy.state_dict(),
+            'value': self.value.state_dict(),
+            'difficulty': self.difficulty,
+            'iter': self.iter,
+            'finished_episodes': self.finished_episodes
+        }
+
+        path = os.path.join('checkpoints', f'{self.name}_{suffix}.cpy')
+        print('saving to', path)
+        torch.save(sdict, path)
+
+    def restore(self, suffix='checkpoint'):
+        path = os.path.join('checkpoints', f'{self.name}_{suffix}.cpy')
+        print('restoring from', path)
+
+        sdict = torch.load(os.path.join('checkpoints', f'{self.name}_{suffix}.cpy'))
+
+        self.policy.load_state_dict(sdict['policy'])
+        self.value.load_state_dict(sdict['value'])
+        self.difficulty = sdict['difficulty']
+        self.iter = sdict['iter']
+        self.finished_episodes = sdict['finished_episodes']
 
 if __name__ == '__main__':
     from argparse import ArgumentParser

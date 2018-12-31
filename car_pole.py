@@ -203,15 +203,22 @@ if __name__ == '__main__':
     import torch
 
     parser = ArgumentParser()
-    parser.add_argument('--id')
     parser.add_argument('--approximator', choices="scaled quantized".split(), default='scaled')
+    parser.add_argument('--tbackup', type=int, default=50)
     parser.add_argument('--discount', type=float, default=0.99)
     parser.add_argument('--difficulty', type=float, default=0.001)
+    parser.add_argument('--episodes', type=int, default=10000)
+    parser.add_argument('--lr-policy', type=float, default=0.01)
+    parser.add_argument('--lr-value', type=float, default=0.01)
     parser.add_argument('--num-actors', type=int, default=10)
     parser.add_argument('--num-layers', type=int, default=2)
     parser.add_argument('--hidden', type=int, default=20)
+    parser.add_argument('--id')
+    parser.add_argument('--restore', action='store_true', default=False)
     parser.add_argument('--trainer', choices='baac maac'.split())
     parser.add_argument('--load-policy', help='initialize policy from file')
+    parser.add_argument('--temperature', type=float, default=1)
+    parser.add_argument('--qsteps', type=int, default=25)
     parser.add_argument('--gpu', action='store_true', default=False)
     parser.add_argument('mode', choices=['demo', 'train', 'curriculum'])
     args = parser.parse_args()
@@ -220,7 +227,7 @@ if __name__ == '__main__':
 
     p_hidden = args.hidden
     v_hidden = args.hidden
-    t_backup = 50
+    t_backup = args.tbackup
 
     diaps = [(0, 1),  # x_coord = 0.5
              (0, 2 * pi),  # angle = 0.01
@@ -231,8 +238,8 @@ if __name__ == '__main__':
         policy = A.ScaledPolicy(task, diaps, n_hidden=p_hidden, num_layers=args.num_layers)
         value = A.ScaledValue(task, diaps, n_hidden=v_hidden)
     elif args.approximator == 'quantized':
-        policy = A.QuantizedPolicy(task, diaps, [25] * 4, n_hidden=p_hidden, num_layers=args.num_layers)
-        value = A.QuantizedValue(task, diaps, [25] * 4, n_hidden=v_hidden, num_layers=args.num_layers)
+        policy = A.QuantizedPolicy(task, diaps, [args.qsteps] * 4, n_hidden=p_hidden, num_layers=args.num_layers)
+        value = A.QuantizedValue(task, diaps, [args.qsteps] * 4, n_hidden=v_hidden, num_layers=args.num_layers)
     else:
         raise ValueError('Unknown approximator', args.approximator)
 
@@ -253,24 +260,24 @@ if __name__ == '__main__':
         from tensorboardX import SummaryWriter
         import actor_critic as AC
 
-        full_name = f'{args.id}-{args.trainer}-carpole-actors{args.num_actors}-penalty100-mforce200-P{args.approximator}-{args.num_layers}-h{p_hidden}-V{args.approximator}-{args.num_layers}-h{v_hidden}-tbackup50-tmax5000rnd-df{args.difficulty}-g{args.discount}-episodic-{args.mode}'
+        full_name = f'{args.id}-{args.trainer}-carpole-act{args.num_actors}-pen100-mf200-P{args.approximator}-{args.num_layers}-h{p_hidden}-V{args.approximator}-{args.num_layers}-h{v_hidden}-tbkp50-tmax5000rnd-df{args.difficulty}-g{args.discount}-{args.mode}'
         writer = SummaryWriter(os.path.join('logs', full_name))
 
         if args.mode == 'train':
             baac = AC.BatchAdvantageActorCritic([PoleBalancer() for _ in range(args.num_actors)], policy=policy, value=value, writer=writer, name=args.id,
-                                                lr=0.01, gamma=args.discount, t_max=5000, t_backup=t_backup, temperature=1,
+                                                lr=args.lr, gamma=args.discount, t_max=5000, t_backup=t_backup, temperature=args.temperature,
                                                 difficulty=args.difficulty, episode_len_target=2000)
-            baac.run_episodes(100000)
+            baac.run_episodes(args.episodes)
         elif args.mode == 'curriculum':
             if args.trainer == 'maac':
                 gain = AC.multi_actor(PoleBalancer, policy, value, writer=writer, autosave_name='26-carpole-pen100-h20-h20-curriculum', n_actors=args.num_actors,
-                                      n_episodes=100000, t_max=5000, t_backup=t_backup, lr=0.01, gamma=args.discount,
+                                      n_episodes=args.episodes, t_max=5000, t_backup=t_backup, lr=args.lr, gamma=args.discount,
                                       difficulty=args.difficulty, max_difficulty=None, gain_target=-0.05)
             elif args.trainer == 'baac':
                 baac = AC.BatchAdvantageActorCritic([PoleBalancer() for _ in range(args.num_actors)], policy=policy, value=value, writer=writer, name=full_name,
-                                                    lr=0.01, gamma=args.discount, t_max=5000, t_backup=t_backup, temperature=1,
-                                                    difficulty=args.difficulty, episode_len_target=2000)
-                baac.run_episodes(100000)
+                                                    lr_policy=args.lr_policy, lr_value=args.lr_value, gamma=args.discount, t_max=5000, t_backup=t_backup, temperature=args.temperature,
+                                                    difficulty=args.difficulty, episode_len_target=2000, restore=args.restore)
+                baac.run_episodes(args.episodes)
             else:
                 raise ValueError('unknown trainer', args.trainer)
         else:
