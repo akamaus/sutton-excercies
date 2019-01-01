@@ -95,6 +95,9 @@ if __name__ == '__main__':
     parser.add_argument('role', choices=['standalone', 'master', 'worker'])
 
     args = parser.parse_args()
+
+    print(args)
+
     host_addr = netifaces.ifaddresses(args.iface)[2][0]['addr']
     print('host_addr', host_addr)
 
@@ -138,6 +141,9 @@ if __name__ == '__main__':
         print('Starting BOBH run')
         res = bo.run(args.num_runs)
 
+        bo.shutdown(shutdown_workers=True)
+        ns.shutdown()
+
         import pickle
-        with open(f'final-result-{args.run_id}.pkl', 'w') as f:
+        with open(f'final-result-{args.run_id}.pkl', 'wb') as f:
             pickle.dump(res, f)
