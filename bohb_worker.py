@@ -90,6 +90,8 @@ if __name__ == '__main__':
     parser.add_argument('--nameserver-port', default=12000)
     parser.add_argument('--iface', default='lo')
     parser.add_argument('--run-id', default='tst')
+    parser.add_argument('--num_runs', type=int, default=1)
+    parser.add_argument('--warmstart-from')
     parser.add_argument('role', choices=['standalone', 'master', 'worker'])
 
     args = parser.parse_args()
@@ -119,16 +121,22 @@ if __name__ == '__main__':
         ns.start()
         sleep(1)
 
+        if args.warmstart_from is not None:
+            prev_run = hpres.logged_results_to_HBS_result(args.warmstart_from)
+        else:
+            prev_run = None
+
+
         print('Starting BOHB Master')
         min_b = 10**6
         bo = BOHB(SuttonWorker.get_configspace(), run_id=args.run_id,
                   eta=3, min_budget=1*min_b, max_budget=81 * min_b,
                   nameserver=args.nameserver, nameserver_port=args.nameserver_port, host=host_addr,
-                  result_logger=rlogger
+                  result_logger=rlogger, previous_result=prev_run
                   )
 
         print('Starting BOBH run')
-        res = bo.run(1)
+        res = bo.run(args.num_runs)
 
         import pickle
         with open(f'final-result-{args.run_id}.pkl', 'w') as f:
