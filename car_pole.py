@@ -219,7 +219,7 @@ if __name__ == '__main__':
     parser.add_argument('--restore', action='store_true', default=False)
     parser.add_argument('--short_name', action='store_true', help='just use id without any descripting suffixes for checkpoint names and logs')
     parser.add_argument('--trainer', choices='baac maac'.split())
-    parser.add_argument('--load-policy', help='initialize policy from file')
+    parser.add_argument('--load-checkpoint', help='initialize policy and value from file')
     parser.add_argument('--temperature', type=float, default=1)
     parser.add_argument('--qsteps', type=int, default=25)
     parser.add_argument('--gpu', action='store_true', default=False)
@@ -248,17 +248,22 @@ if __name__ == '__main__':
     else:
         raise ValueError('Unknown approximator', args.approximator)
 
+    if args.load_checkpoint is not None:
+        checkpoint = torch.load(args.load_checkpoint)
+        policy_state = checkpoint['policy']
+        value_state = checkpoint['value']
+        policy.load_state_dict(policy_state)
+        value.load_state_dict(value_state)
+
     if args.gpu:
         d = torch.device('cuda')
         policy.set_device(d)
         value.set_device(d)
 
     if args.mode == 'demo':
-        if args.load_policy is not None:
-            policy_state = torch.load(args.load_policy)
-            policy.load_state_dict(policy_state)
-        else:
+        if args.load_checkpoint is None:
             policy = None
+
         res = run_visualizer(policy, args.difficulty)
         sys.exit(res)
     else:
