@@ -213,8 +213,10 @@ if __name__ == '__main__':
     parser.add_argument('--lr-policy', type=float, default=0.01)
     parser.add_argument('--lr-value', type=float, default=0.01)
     parser.add_argument('--num-actors', type=int, default=10)
-    parser.add_argument('--num-layers', type=int, default=2)
-    parser.add_argument('--hidden', type=int, default=20)
+    parser.add_argument('--p-num-layers', type=int, default=2)
+    parser.add_argument('--v-num-layers', type=int, default=2)
+    parser.add_argument('--p-hidden', type=int, default=20)
+    parser.add_argument('--v-hidden', type=int, default=20)
     parser.add_argument('--id')
     parser.add_argument('--restore', action='store_true', default=False)
     parser.add_argument('--short_name', action='store_true', help='just use id without any descripting suffixes for checkpoint names and logs')
@@ -230,8 +232,6 @@ if __name__ == '__main__':
 
     task = PoleBalancer()
 
-    p_hidden = args.hidden
-    v_hidden = args.hidden
     t_backup = args.tbackup
 
     diaps = [(0, 1),  # x_coord = 0.5
@@ -240,11 +240,11 @@ if __name__ == '__main__':
              (-80, 80)]  # angle_velocity = 0
 
     if args.approximator == 'scaled':
-        policy = A.ScaledPolicy(task, diaps, n_hidden=p_hidden, num_layers=args.num_layers)
-        value = A.ScaledValue(task, diaps, n_hidden=v_hidden)
+        policy = A.ScaledPolicy(task, diaps, n_hidden=args.p_hidden, num_layers=args.p_num_layers)
+        value = A.ScaledValue(task, diaps, n_hidden=args.v_hidden, num_layers=args.v_num_layers)
     elif args.approximator == 'quantized':
-        policy = A.QuantizedPolicy(task, diaps, [args.qsteps] * 4, n_hidden=p_hidden, num_layers=args.num_layers)
-        value = A.QuantizedValue(task, diaps, [args.qsteps] * 4, n_hidden=v_hidden, num_layers=args.num_layers)
+        policy = A.QuantizedPolicy(task, diaps, [args.qsteps] * 4, n_hidden=args.p_hidden, num_layers=args.p_num_layers)
+        value = A.QuantizedValue(task, diaps, [args.qsteps] * 4, n_hidden=args.v_hidden, num_layers=args.v_num_layers)
     else:
         raise ValueError('Unknown approximator', args.approximator)
 
@@ -273,7 +273,7 @@ if __name__ == '__main__':
         if args.short_name:
             full_name = args.id
         else:
-            full_name = f'{args.id}-{args.trainer}-carpole-act{args.num_actors}-pen100-mf200-P{args.approximator}-{args.num_layers}-h{p_hidden}-V{args.approximator}-{args.num_layers}-h{v_hidden}-tbkp50-tmax5000rnd-sdf{args.difficulty:.2}-g{args.discount:.2}-{args.mode}'
+            full_name = f'{args.id}-{args.trainer}-carpole-act{args.num_actors}-pen100-mf200-P{args.approximator}-{args.p_num_layers}-h{args.p_hidden}-V{args.approximator}-{args.v_num_layers}-h{args.v_hidden}-tbkp50-tmax5000rnd-sdf{args.difficulty:.2}-g{args.discount:.2}-{args.mode}'
         writer = SummaryWriter(os.path.join('logs', full_name))
 
         if args.mode == 'train':
@@ -289,7 +289,7 @@ if __name__ == '__main__':
             elif args.trainer == 'baac':
                 baac = AC.BatchAdvantageActorCritic([PoleBalancer() for _ in range(args.num_actors)], policy=policy, value=value, writer=writer, name=full_name,
                                                     lr_policy=args.lr_policy, lr_value=args.lr_value, gamma=args.discount, t_max=5000, t_backup=t_backup, temperature=args.temperature,
-                                                    difficulty=args.difficulty, episode_len_target=2000, restore=args.restore)
+                                                    difficulty=args.difficulty, episode_len_target=2000, restore=args.restore, difficulty_step=0.05)
                 baac.run_episodes(n_iters=args.iters, n_episodes=args.episodes)
                 print('BO_RAW', 'iter', baac.iter)
                 print('BO_RAW', 'finished_episodes', baac.finished_episodes)
