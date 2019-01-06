@@ -62,24 +62,26 @@ class SuttonWorker(Worker):
         cs = CS.ConfigurationSpace()
         cs.add_hyperparameter(CS.CategoricalHyperparameter('approximator', ['scaled', 'quantized']))
         cs.add_hyperparameter(CS.UniformIntegerHyperparameter('tbackup', lower=2, upper=500, log=True))
-        cs.add_hyperparameter(CS.UniformFloatHyperparameter('discount', lower=0.9, upper=1, log=True))
+        cs.add_hyperparameter(CS.UniformFloatHyperparameter('discount', lower=0.98, upper=1, log=True))
 #        parser.add_argument('--difficulty', type=float, default=0.001)
 #        parser.add_argument('--episodes', type=int, default=10000)
 
-        cs.add_hyperparameter(CS.UniformFloatHyperparameter('lr-policy', lower=0.0001, upper=0.1, log=True))
-        cs.add_hyperparameter(CS.UniformFloatHyperparameter('lr-value', lower=0.0001, upper=0.1, log=True))
+        cs.add_hyperparameter(CS.UniformFloatHyperparameter('lr-policy', lower=0.0001, upper=0.01, log=True))
+        cs.add_hyperparameter(CS.UniformFloatHyperparameter('lr-value', lower=0.0001, upper=0.01, log=True))
 
 # !!!        parser.add_argument('--lr', type=float, default=0.01)
 
-        cs.add_hyperparameter(CS.UniformIntegerHyperparameter('num-actors', lower=1, upper=50))
-        cs.add_hyperparameter(CS.UniformIntegerHyperparameter('num-layers', lower=2, upper=4))
-        cs.add_hyperparameter(CS.UniformIntegerHyperparameter('hidden', lower=5, upper=50))
+        cs.add_hyperparameter(CS.UniformIntegerHyperparameter('num-actors', lower=1, upper=10))
 
-#        parser.add_argument('--trainer', choices='baac maac'.split())
+        cs.add_hyperparameter(CS.UniformIntegerHyperparameter('p-num-layers', lower=2, upper=5))
+        cs.add_hyperparameter(CS.UniformIntegerHyperparameter('p-hidden', lower=5, upper=50))
 
-        cs.add_hyperparameter(CS.UniformFloatHyperparameter('temperature', lower=0.1, upper=10, log=True))
+        cs.add_hyperparameter(CS.UniformIntegerHyperparameter('v-num-layers', lower=2, upper=5))
+        cs.add_hyperparameter(CS.UniformIntegerHyperparameter('v-hidden', lower=5, upper=50))
 
-        cs.add_hyperparameter(CS.UniformIntegerHyperparameter('qsteps', lower=10, upper=50))
+        cs.add_hyperparameter(CS.UniformFloatHyperparameter('temperature', lower=0.1, upper=50, log=True))
+
+        cs.add_hyperparameter(CS.UniformIntegerHyperparameter('qsteps', lower=30, upper=100))
 
         return cs
 
