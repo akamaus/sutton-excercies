@@ -11,7 +11,7 @@ let
     buildInputs =
     ( with pkgs;
       with self;
-    [ tqdm
+    [ fanova
       ipython
       jupyter
       hpbandster
@@ -19,9 +19,10 @@ let
       numpy
       pyqt5
       python
-      pytorchWithCuda
+      pytorch
       snakeviz
       tensorboardX
+      tqdm
     ]);
 
     shellHook = with pkgs;
