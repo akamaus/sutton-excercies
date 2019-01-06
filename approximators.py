@@ -202,11 +202,11 @@ class SpatialValue(BaseValue):
 
 class ScaledValue(BaseValue):
     """ Value function with normalized feature input"""
-    def __init__(self, env, diaps, n_hidden=128):
+    def __init__(self, env, diaps, **kargs):
         st0 = env.get_state()
         assert len(st0) == len(diaps)
         self.input_encoder = ScalingEncoder(diaps)
-        super().__init__(self.input_encoder.enc_size, n_hidden=n_hidden)
+        super().__init__(self.input_encoder.enc_size, **kargs)
 
 
 class QuantizedValue(BaseValue):
